@@ -201,11 +201,11 @@ def on_login_recorded(sender, instance, created, **kwargs):
     if not created:
         return
     
-    if instance.status == 'success':
+    if instance.status == LoginHistory.Status.SUCCESS:
         _handle_successful_login(instance)
-    elif instance.status == 'failed':
+    elif instance.status == LoginHistory.Status.FAILED:
         _handle_failed_login(instance)
-    elif instance.status == 'blocked':
+    elif instance.status == LoginHistory.Status.BLOCKED:
         _handle_blocked_login(instance)
 
 
