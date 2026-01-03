@@ -191,9 +191,24 @@ class SluggedMixin(models.Model):
         return slug
     
     def save(self, *args, **kwargs):
-        if not self.slug:
-            self.slug = self.generate_unique_slug()
-        super().save(*args, **kwargs)
+        from django.db import IntegrityError
+        
+        max_retries = 5
+        for attempt in range(max_retries):
+            if not self.slug:
+                self.slug = self.generate_unique_slug()
+            
+            try:
+                super().save(*args, **kwargs)
+                return
+            except IntegrityError as e:
+                # Check if it's a slug uniqueness error
+                if 'slug' in str(e).lower() and attempt < max_retries - 1:
+                    # Regenerate slug with random suffix
+                    base_slug = slugify(self.get_slug_source(), allow_unicode=True) or str(uuid.uuid4())[:8]
+                    self.slug = f"{base_slug}-{uuid.uuid4().hex[:6]}"
+                    continue
+                raise
 
 
 class OrderedMixin(models.Model):
