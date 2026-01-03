@@ -164,15 +164,25 @@ class User(AbstractUser):
         return self.email
     
     def save(self, *args, **kwargs):
+        import secrets
         # Auto-generate username from email if not provided
         if not self.username:
-            base_username = self.email.split('@')[0]
-            username = base_username
-            counter = 1
-            while User.objects.with_deleted().filter(username=username).exists():
-                username = f"{base_username}{counter}"
-                counter += 1
-            self.username = username
+            base_username = self.email.split('@')[0][:30]  # Limit base length
+            
+            # Try original username first
+            if not User.objects.with_deleted().filter(username=base_username).exists():
+                self.username = base_username
+            else:
+                # Use random suffix instead of N+1 loop
+                for _ in range(10):  # Max 10 attempts
+                    random_suffix = secrets.token_hex(3)  # 6 hex chars
+                    username = f"{base_username}_{random_suffix}"
+                    if not User.objects.with_deleted().filter(username=username).exists():
+                        self.username = username
+                        break
+                else:
+                    # Fallback to UUID if all attempts fail
+                    self.username = f"{base_username}_{uuid.uuid4().hex[:8]}"
         super().save(*args, **kwargs)
     
     # --- Domain Methods ---

@@ -225,16 +225,31 @@ class Order(UUIDModel):
         return f"Đơn hàng #{self.order_number}"
     
     def save(self, *args, **kwargs):
+        from django.db import IntegrityError, transaction
+        
         if not self.order_number:
-            self.order_number = self._generate_order_number()
-        super().save(*args, **kwargs)
+            # Retry up to 5 times if order number collision
+            for attempt in range(5):
+                try:
+                    self.order_number = self._generate_order_number()
+                    with transaction.atomic():
+                        super().save(*args, **kwargs)
+                    return
+                except IntegrityError as e:
+                    if 'order_number' in str(e).lower() and attempt < 4:
+                        continue
+                    raise
+            raise ValueError("Không thể sinh mã đơn hàng duy nhất")
+        else:
+            super().save(*args, **kwargs)
     
     @staticmethod
     def _generate_order_number() -> str:
-        """Generate unique order number."""
-        timestamp = str(int(time.time()))[-8:]
-        unique_id = str(uuid.uuid4().int)[:4]
-        return f"OWL{timestamp}{unique_id}"
+        """Generate unique order number with better entropy."""
+        import secrets
+        timestamp = str(int(time.time()))[-6:]  # 6 digits of timestamp
+        random_part = secrets.token_hex(3).upper()  # 6 random hex chars
+        return f"OWL{timestamp}{random_part}"
     
     # --- Computed Properties ---
     
@@ -311,8 +326,11 @@ class Order(UUIDModel):
     
     def confirm(self, admin_user=None) -> None:
         """Confirm order."""
+        from apps.common.core.exceptions import BusinessRuleViolation
         if self.status != self.Status.PENDING:
-            return
+            raise BusinessRuleViolation(
+                message=f'Không thể xác nhận đơn hàng ở trạng thái {self.get_status_display()}'
+            )
         
         old_status = self.status
         self.status = self.Status.CONFIRMED
@@ -322,8 +340,11 @@ class Order(UUIDModel):
     
     def mark_processing(self, admin_user=None) -> None:
         """Mark as processing."""
+        from apps.common.core.exceptions import BusinessRuleViolation
         if self.status not in [self.Status.PENDING, self.Status.CONFIRMED]:
-            return
+            raise BusinessRuleViolation(
+                message=f'Không thể chuyển sang xử lý ở trạng thái {self.get_status_display()}'
+            )
         
         old_status = self.status
         self.status = self.Status.PROCESSING
@@ -334,8 +355,11 @@ class Order(UUIDModel):
     
     def mark_ready_to_ship(self, admin_user=None) -> None:
         """Mark as ready to ship."""
+        from apps.common.core.exceptions import BusinessRuleViolation
         if self.status not in [self.Status.CONFIRMED, self.Status.PROCESSING]:
-            return
+            raise BusinessRuleViolation(
+                message=f'Không thể đánh dấu sẵn sàng giao ở trạng thái {self.get_status_display()}'
+            )
         
         old_status = self.status
         self.status = self.Status.READY_TO_SHIP
@@ -363,8 +387,11 @@ class Order(UUIDModel):
     
     def ship(self, tracking_code: str, provider: str = 'ghn', admin_user=None) -> None:
         """Mark order as shipped."""
+        from apps.common.core.exceptions import BusinessRuleViolation
         if self.status not in [self.Status.CONFIRMED, self.Status.PROCESSING, self.Status.READY_TO_SHIP]:
-            return
+            raise BusinessRuleViolation(
+                message=f'Không thể giao hàng ở trạng thái {self.get_status_display()}'
+            )
         
         old_status = self.status
         self.status = self.Status.SHIPPING
@@ -379,8 +406,11 @@ class Order(UUIDModel):
     
     def deliver(self, admin_user=None) -> None:
         """Mark order as delivered."""
+        from apps.common.core.exceptions import BusinessRuleViolation
         if self.status != self.Status.SHIPPING:
-            return
+            raise BusinessRuleViolation(
+                message=f'Không thể đánh dấu đã giao ở trạng thái {self.get_status_display()}'
+            )
         
         old_status = self.status
         self.status = self.Status.DELIVERED
@@ -398,8 +428,11 @@ class Order(UUIDModel):
     
     def complete(self, admin_user=None) -> None:
         """Mark order as completed (after return window)."""
+        from apps.common.core.exceptions import BusinessRuleViolation
         if self.status != self.Status.DELIVERED:
-            return
+            raise BusinessRuleViolation(
+                message=f'Không thể hoàn thành đơn ở trạng thái {self.get_status_display()}'
+            )
         
         old_status = self.status
         self.status = self.Status.COMPLETED

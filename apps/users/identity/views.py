@@ -162,7 +162,8 @@ class VerifyEmailView(APIView):
         try:
             user_id = force_str(urlsafe_base64_decode(uid))
             user = User.objects.get(pk=user_id)
-        except (TypeError, ValueError, User.DoesNotExist):
+        except (TypeError, ValueError, User.DoesNotExist, Exception):
+            # Catch all exceptions including ValidationError for invalid UUID format
             return Response(
                 {'error': 'Link xác thực không hợp lệ'},
                 status=status.HTTP_400_BAD_REQUEST
