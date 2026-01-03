@@ -201,6 +201,12 @@ GHN_TOKEN = env('GHN_API_TOKEN')
 GHN_SHOP_ID = env('GHN_SHOP_ID')
 GHN_SANDBOX = env.bool('GHN_SANDBOX')
 
+# --- COMMERCE SETTINGS ---
+# Shipping fee in VND when GHN API fails
+DEFAULT_SHIPPING_FEE = env.int('DEFAULT_SHIPPING_FEE', default=30000)
+# Orders above this value get free shipping
+FREE_SHIPPING_THRESHOLD = env.int('FREE_SHIPPING_THRESHOLD', default=500000)
+
 # --- API CONFIGURATION ---
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication',),

@@ -89,9 +89,11 @@ class OrderService:
                     message=f'Sản phẩm "{product.name}" không còn bán'
                 )
             
-            # Check stock
+            # Check stock with row lock to prevent race condition
             if hasattr(product, 'stock'):
-                available = product.stock.available_quantity
+                from apps.store.inventory.models import ProductStock
+                stock = ProductStock.objects.select_for_update().get(product=product)
+                available = stock.available_quantity
                 if cart_item.quantity > available:
                     raise BusinessRuleViolation(
                         message=f'Sản phẩm "{product.name}" chỉ còn {available} trong kho'
@@ -157,10 +159,11 @@ class OrderService:
             user_agent=user_agent
         )
         
-        # Create order items
+        # Create order items using bulk_create for performance
+        order_items = []
         for item_data in items_data:
             product = item_data['product']
-            OrderItem.objects.create(
+            order_items.append(OrderItem(
                 order=order,
                 product=product,
                 product_name=product.name,
@@ -170,9 +173,12 @@ class OrderService:
                 quantity=item_data['quantity'],
                 unit_price=item_data['unit_price'],
                 original_price=item_data['original_price']
-            )
-            
-            # Reserve stock
+            ))
+        OrderItem.objects.bulk_create(order_items)
+        
+        # Reserve stock
+        for item_data in items_data:
+            product = item_data['product']
             if hasattr(product, 'stock'):
                 product.stock.reserve(item_data['quantity'], order.order_number)
         
@@ -561,8 +567,8 @@ class OrderService:
         except Exception as e:
             logger.warning(f"Shipping fee calculation failed: {e}")
         
-        # Default shipping fee
-        return Decimal('30000')
+        # Default shipping fee from settings
+        return Decimal(str(getattr(settings, 'DEFAULT_SHIPPING_FEE', 30000)))
     
     @staticmethod
     def _apply_coupon(
