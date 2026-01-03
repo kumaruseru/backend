@@ -7,6 +7,7 @@ Core identity models for the e-commerce platform:
 - SocialAccount: OAuth provider links
 """
 import uuid
+import secrets
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
@@ -164,7 +165,6 @@ class User(AbstractUser):
         return self.email
     
     def save(self, *args, **kwargs):
-        import secrets
         # Auto-generate username from email if not provided
         if not self.username:
             base_username = self.email.split('@')[0][:30]  # Limit base length

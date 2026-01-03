@@ -391,7 +391,9 @@ class OrderService:
     @staticmethod
     @transaction.atomic
     def confirm_order(order: Order, admin_user=None) -> Order:
-        """Confirm a pending order."""
+        """Confirm a pending order with row lock."""
+        # Lock the row to prevent race conditions
+        order = Order.objects.select_for_update().get(pk=order.pk)
         order.confirm(admin_user)
         logger.info(f"Order confirmed: {order.order_number}")
         OrderService._notify_order_confirmed(order)
@@ -404,7 +406,10 @@ class OrderService:
         reason: str = '',
         cancelled_by=None
     ) -> Order:
-        """Cancel an order."""
+        """Cancel an order with row lock."""
+        # Lock the row to prevent race conditions
+        order = Order.objects.select_for_update().get(pk=order.pk)
+        
         if not order.can_cancel:
             raise BusinessRuleViolation(
                 message='Không thể hủy đơn hàng ở trạng thái này'
