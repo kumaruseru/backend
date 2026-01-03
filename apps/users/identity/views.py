@@ -45,7 +45,9 @@ class RegisterView(APIView):
                 last_name=serializer.validated_data.get('last_name', '')
             )
             
-            # TODO: Send verification email
+            # Send verification email asynchronously
+            from .tasks import send_verification_email
+            send_verification_email.delay(user.id)
             
             return Response(
                 UserSerializer(user).data,
@@ -130,6 +132,95 @@ class RefreshTokenView(APIView):
             return Response(tokens)
         except DomainException as e:
             return Response(e.to_dict(), status=status.HTTP_401_UNAUTHORIZED)
+
+
+class VerifyEmailView(APIView):
+    """Email verification endpoint."""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        request={'type': 'object', 'properties': {'uid': {'type': 'string'}, 'token': {'type': 'string'}}},
+        responses={200: OpenApiResponse(description='Email verified successfully')},
+        tags=['Authentication']
+    )
+    def post(self, request):
+        """Verify user email with token."""
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_decode
+        from django.utils.encoding import force_str
+        from django.utils import timezone
+        
+        uid = request.data.get('uid')
+        token = request.data.get('token')
+        
+        if not uid or not token:
+            return Response(
+                {'error': 'UID và token là bắt buộc'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user_id = force_str(urlsafe_base64_decode(uid))
+            user = User.objects.get(pk=user_id)
+        except (TypeError, ValueError, User.DoesNotExist):
+            return Response(
+                {'error': 'Link xác thực không hợp lệ'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if user.is_email_verified:
+            return Response({'message': 'Email đã được xác thực trước đó'})
+        
+        if not default_token_generator.check_token(user, token):
+            return Response(
+                {'error': 'Link xác thực đã hết hạn hoặc không hợp lệ'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Mark as verified
+        user.is_email_verified = True
+        user.email_verified_at = timezone.now()
+        user.save(update_fields=['is_email_verified', 'email_verified_at'])
+        
+        # Send welcome email
+        from .tasks import send_welcome_email
+        send_welcome_email.delay(str(user.id))
+        
+        return Response({'message': 'Email đã được xác thực thành công'})
+
+
+class ResendVerificationView(APIView):
+    """Resend verification email endpoint."""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        request={'type': 'object', 'properties': {'email': {'type': 'string'}}},
+        responses={200: OpenApiResponse(description='Verification email sent')},
+        tags=['Authentication']
+    )
+    def post(self, request):
+        """Resend verification email."""
+        email = request.data.get('email')
+        
+        if not email:
+            return Response(
+                {'error': 'Email là bắt buộc'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # Don't reveal if email exists
+            return Response({'message': 'Nếu email tồn tại, bạn sẽ nhận được email xác thực'})
+        
+        if user.is_email_verified:
+            return Response({'message': 'Email đã được xác thực'})
+        
+        from .tasks import send_verification_email
+        send_verification_email.delay(str(user.id))
+        
+        return Response({'message': 'Email xác thực đã được gửi'})
 
 
 class ProfileView(APIView):

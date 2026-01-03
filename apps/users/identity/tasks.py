@@ -84,6 +84,53 @@ def send_welcome_email(self, user_id: str):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_verification_email(self, user_id: str):
+    """
+    Send email verification link to newly registered user.
+    """
+    try:
+        from .models import User
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+        
+        user = User.objects.get(id=user_id)
+        
+        # Don't send if already verified
+        if user.is_email_verified:
+            return
+        
+        # Generate verification token
+        token = default_token_generator.make_token(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        
+        verification_url = f"{FRONTEND_URL}/verify-email?uid={uid}&token={token}"
+        
+        context = {
+            'user': user,
+            'first_name': user.first_name or 'bạn',
+            'verification_url': verification_url,
+            'site_url': FRONTEND_URL,
+            'expires_hours': 24,
+        }
+        
+        send_html_email(
+            subject='Xác thực địa chỉ email của bạn ✉️',
+            template_name='email_verification',
+            context=context,
+            to_email=user.email
+        )
+        
+        logger.info(f"Verification email sent to {user.email}")
+        
+    except User.DoesNotExist:
+        logger.warning(f"User not found for verification email: {user_id}")
+    except Exception as e:
+        logger.exception(f"Failed to send verification email: {e}")
+        raise self.retry(exc=e)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_password_change_notification(self, user_id: str):
     """
     Notify user that password was changed.

@@ -564,11 +564,28 @@ class OrderService:
             )
             if result.get('success'):
                 return Decimal(result.get('total', 30000))
+            else:
+                error_msg = result.get('error', 'Không thể tính phí vận chuyển')
+                logger.error(f"GHN fee calculation failed: {error_msg}")
+                raise BusinessRuleViolation(
+                    message=f'Không thể tính phí vận chuyển: {error_msg}. Vui lòng thử lại.'
+                )
+        except BusinessRuleViolation:
+            raise
         except Exception as e:
-            logger.warning(f"Shipping fee calculation failed: {e}")
-        
-        # Default shipping fee from settings
-        return Decimal(str(getattr(settings, 'DEFAULT_SHIPPING_FEE', 30000)))
+            logger.error(f"Shipping fee calculation failed: {e}")
+            # Alert admins if GHN is down
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(
+                    f"GHN API Down - Shipping fee calculation failed: {e}",
+                    level="error"
+                )
+            except Exception:
+                pass
+            raise BusinessRuleViolation(
+                message='Hệ thống vận chuyển tạm thời không khả dụng. Vui lòng thử lại sau.'
+            )
     
     @staticmethod
     def _apply_coupon(
