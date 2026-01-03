@@ -1,0 +1,507 @@
+"""
+Store Catalog - Production-Ready API Views.
+
+Comprehensive catalog endpoints with:
+- Category navigation
+- Product listing and detail
+- Search and filtering
+- Brand browsing
+- Admin management
+"""
+from rest_framework import status, permissions, generics
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
+
+from apps.common.core.exceptions import DomainException
+from .models import Category, Brand, Product, ProductTag
+from .serializers import (
+    CategorySerializer, CategorySimpleSerializer, CategoryTreeSerializer,
+    BrandSerializer, BrandSimpleSerializer,
+    ProductTagSerializer,
+    ProductListSerializer, ProductDetailSerializer, ProductCardSerializer,
+    ProductCreateSerializer, ProductUpdateSerializer, ProductBulkUpdateSerializer,
+    CatalogFiltersSerializer, ProductSearchSerializer
+)
+from .services import CatalogService
+from .filters import ProductFilter
+
+
+# ==================== Category Endpoints ====================
+
+class CategoryListView(generics.ListAPIView):
+    """List all active root categories with children."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = CategorySerializer
+    
+    def get_queryset(self):
+        return Category.objects.filter(
+            is_active=True,
+            parent__isnull=True
+        ).prefetch_related('children').order_by('sort_order', 'name')
+    
+    @extend_schema(
+        responses={200: CategorySerializer(many=True)},
+        tags=['Catalog - Categories']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class CategoryTreeView(APIView):
+    """Get full category tree structure."""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        responses={200: CategoryTreeSerializer(many=True)},
+        tags=['Catalog - Categories']
+    )
+    def get(self, request):
+        categories = CatalogService.get_category_tree(
+            include_empty=request.query_params.get('include_empty', 'false').lower() == 'true'
+        )
+        return Response(CategoryTreeSerializer(categories, many=True).data)
+
+
+class CategoryDetailView(generics.RetrieveAPIView):
+    """Get category details by slug."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = CategorySerializer
+    lookup_field = 'slug'
+    
+    def get_queryset(self):
+        return Category.objects.filter(is_active=True).prefetch_related('children')
+    
+    @extend_schema(
+        responses={200: CategorySerializer},
+        tags=['Catalog - Categories']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class CategoryFiltersView(APIView):
+    """Get available filters for a category."""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        responses={200: CatalogFiltersSerializer},
+        tags=['Catalog - Categories']
+    )
+    def get(self, request, slug):
+        try:
+            category = CatalogService.get_category_by_slug(slug)
+            filters = CatalogService.get_category_filters(category)
+            
+            return Response({
+                'category': CategorySimpleSerializer(category).data,
+                'brands': BrandSimpleSerializer(filters['brands'], many=True).data,
+                'price_range': filters['price_range'],
+                'tags': ProductTagSerializer(filters['tags'], many=True).data,
+                'product_count': filters['product_count']
+            })
+        except DomainException as e:
+            return Response(e.to_dict(), status=status.HTTP_404_NOT_FOUND)
+
+
+# ==================== Brand Endpoints ====================
+
+class BrandListView(generics.ListAPIView):
+    """List all active brands."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = BrandSerializer
+    
+    def get_queryset(self):
+        queryset = Brand.objects.filter(is_active=True).order_by('sort_order', 'name')
+        
+        if self.request.query_params.get('featured') == 'true':
+            queryset = queryset.filter(is_featured=True)
+        
+        return queryset
+    
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('featured', bool, description='Featured brands only'),
+        ],
+        responses={200: BrandSerializer(many=True)},
+        tags=['Catalog - Brands']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class BrandDetailView(generics.RetrieveAPIView):
+    """Get brand details by slug."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = BrandSerializer
+    lookup_field = 'slug'
+    
+    def get_queryset(self):
+        return Brand.objects.filter(is_active=True)
+    
+    @extend_schema(
+        responses={200: BrandSerializer},
+        tags=['Catalog - Brands']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+# ==================== Product Endpoints ====================
+
+class ProductListView(generics.ListAPIView):
+    """
+    List products with filtering and pagination.
+    
+    Supports filtering by:
+    - category (slug or id)
+    - brand
+    - price range (min_price, max_price)
+    - on_sale, featured, in_stock
+    - search (q)
+    - ordering
+    """
+    permission_classes = [permissions.AllowAny]
+    serializer_class = ProductListSerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = ProductFilter
+    
+    def get_queryset(self):
+        return Product.objects.active().select_related(
+            'category', 'brand'
+        ).prefetch_related('images')
+    
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('category', str, description='Category slug'),
+            OpenApiParameter('category_id', int, description='Category ID'),
+            OpenApiParameter('brand', str, description='Brand slug'),
+            OpenApiParameter('brand_id', int, description='Brand ID'),
+            OpenApiParameter('min_price', int, description='Minimum price'),
+            OpenApiParameter('max_price', int, description='Maximum price'),
+            OpenApiParameter('on_sale', bool, description='On sale only'),
+            OpenApiParameter('featured', bool, description='Featured only'),
+            OpenApiParameter('in_stock', bool, description='In stock only'),
+            OpenApiParameter('is_new', bool, description='New arrivals only'),
+            OpenApiParameter('q', str, description='Search query'),
+            OpenApiParameter('ordering', str, description='Ordering: price, -price, name, -created, popular'),
+        ],
+        responses={200: ProductListSerializer(many=True)},
+        tags=['Catalog - Products']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class ProductDetailView(APIView):
+    """Get product details by slug."""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        responses={200: ProductDetailSerializer},
+        tags=['Catalog - Products']
+    )
+    def get(self, request, slug):
+        try:
+            product = CatalogService.get_product_by_slug(slug, increment_view=True)
+            return Response(ProductDetailSerializer(product).data)
+        except DomainException as e:
+            return Response(e.to_dict(), status=status.HTTP_404_NOT_FOUND)
+
+
+class ProductByIdView(APIView):
+    """Get product by UUID."""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        responses={200: ProductDetailSerializer},
+        tags=['Catalog - Products']
+    )
+    def get(self, request, product_id):
+        try:
+            product = CatalogService.get_product_by_id(product_id)
+            return Response(ProductDetailSerializer(product).data)
+        except DomainException as e:
+            return Response(e.to_dict(), status=status.HTTP_404_NOT_FOUND)
+
+
+class FeaturedProductsView(generics.ListAPIView):
+    """List featured products."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = ProductListSerializer
+    pagination_class = None
+    
+    def get_queryset(self):
+        limit = int(self.request.query_params.get('limit', 12))
+        return CatalogService.get_featured_products(limit)
+    
+    @extend_schema(
+        parameters=[OpenApiParameter('limit', int)],
+        responses={200: ProductListSerializer(many=True)},
+        tags=['Catalog - Products']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class NewArrivalsView(generics.ListAPIView):
+    """List new arrival products."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = ProductListSerializer
+    pagination_class = None
+    
+    def get_queryset(self):
+        limit = int(self.request.query_params.get('limit', 12))
+        days = int(self.request.query_params.get('days', 30))
+        return CatalogService.get_new_arrivals(limit, days)
+    
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('limit', int),
+            OpenApiParameter('days', int),
+        ],
+        responses={200: ProductListSerializer(many=True)},
+        tags=['Catalog - Products']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class BestsellersView(generics.ListAPIView):
+    """List bestselling products."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = ProductListSerializer
+    pagination_class = None
+    
+    def get_queryset(self):
+        limit = int(self.request.query_params.get('limit', 12))
+        return CatalogService.get_bestsellers(limit)
+    
+    @extend_schema(
+        parameters=[OpenApiParameter('limit', int)],
+        responses={200: ProductListSerializer(many=True)},
+        tags=['Catalog - Products']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class OnSaleProductsView(generics.ListAPIView):
+    """List products on sale."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = ProductListSerializer
+    pagination_class = None
+    
+    def get_queryset(self):
+        limit = int(self.request.query_params.get('limit', 12))
+        return CatalogService.get_on_sale_products(limit)
+    
+    @extend_schema(
+        parameters=[OpenApiParameter('limit', int)],
+        responses={200: ProductListSerializer(many=True)},
+        tags=['Catalog - Products']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class RelatedProductsView(generics.ListAPIView):
+    """Get related products for a given product."""
+    permission_classes = [permissions.AllowAny]
+    serializer_class = ProductListSerializer
+    pagination_class = None
+    
+    def get_queryset(self):
+        slug = self.kwargs.get('slug')
+        limit = int(self.request.query_params.get('limit', 8))
+        
+        try:
+            product = Product.objects.get(slug=slug)
+            return CatalogService.get_related_products(product, limit)
+        except Product.DoesNotExist:
+            return Product.objects.none()
+    
+    @extend_schema(
+        parameters=[OpenApiParameter('limit', int)],
+        responses={200: ProductListSerializer(many=True)},
+        tags=['Catalog - Products']
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+# ==================== Search Endpoints ====================
+
+class SearchView(APIView):
+    """Search products."""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('q', str, required=True),
+            OpenApiParameter('category_id', int),
+            OpenApiParameter('brand_id', int),
+            OpenApiParameter('min_price', int),
+            OpenApiParameter('max_price', int),
+            OpenApiParameter('in_stock', bool),
+            OpenApiParameter('on_sale', bool),
+            OpenApiParameter('ordering', str),
+            OpenApiParameter('limit', int),
+        ],
+        responses={200: ProductListSerializer(many=True)},
+        tags=['Catalog - Search']
+    )
+    def get(self, request):
+        query = request.query_params.get('q', '')
+        
+        result = CatalogService.search_products(
+            query=query,
+            category_id=request.query_params.get('category_id'),
+            brand_id=request.query_params.get('brand_id'),
+            min_price=request.query_params.get('min_price'),
+            max_price=request.query_params.get('max_price'),
+            in_stock=request.query_params.get('in_stock') == 'true',
+            on_sale=request.query_params.get('on_sale') == 'true',
+            ordering=request.query_params.get('ordering', '-created_at'),
+            limit=int(request.query_params.get('limit', 50))
+        )
+        
+        return Response({
+            'products': ProductListSerializer(result['products'], many=True).data,
+            'total': result['total']
+        })
+
+
+class SearchSuggestionsView(APIView):
+    """Get search suggestions for autocomplete."""
+    permission_classes = [permissions.AllowAny]
+    
+    @extend_schema(
+        parameters=[OpenApiParameter('q', str, required=True)],
+        responses={200: ProductSearchSerializer},
+        tags=['Catalog - Search']
+    )
+    def get(self, request):
+        query = request.query_params.get('q', '')
+        
+        if len(query) < 2:
+            return Response({'products': [], 'categories': [], 'brands': []})
+        
+        result = CatalogService.get_search_suggestions(query)
+        
+        return Response({
+            'products': ProductCardSerializer(result['products'], many=True).data,
+            'categories': CategorySimpleSerializer(result['categories'], many=True).data,
+            'brands': BrandSimpleSerializer(result['brands'], many=True).data
+        })
+
+
+# ==================== Admin Endpoints ====================
+
+class AdminProductListView(generics.ListAPIView):
+    """Admin: List all products."""
+    permission_classes = [permissions.IsAdminUser]
+    serializer_class = ProductListSerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = ProductFilter
+    
+    def get_queryset(self):
+        return Product.objects.all().select_related('category', 'brand')
+    
+    @extend_schema(tags=['Catalog - Admin'])
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class AdminProductDetailView(APIView):
+    """Admin: Get/Update/Delete product."""
+    permission_classes = [permissions.IsAdminUser]
+    
+    @extend_schema(
+        responses={200: ProductDetailSerializer},
+        tags=['Catalog - Admin']
+    )
+    def get(self, request, product_id):
+        try:
+            product = Product.objects.select_related('category', 'brand').get(id=product_id)
+            return Response(ProductDetailSerializer(product).data)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @extend_schema(
+        request=ProductUpdateSerializer,
+        responses={200: ProductDetailSerializer},
+        tags=['Catalog - Admin']
+    )
+    def patch(self, request, product_id):
+        try:
+            product = Product.objects.get(id=product_id)
+            serializer = ProductUpdateSerializer(product, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            
+            updated = CatalogService.update_product(product, serializer.validated_data)
+            return Response(ProductDetailSerializer(updated).data)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @extend_schema(
+        responses={204: None},
+        tags=['Catalog - Admin']
+    )
+    def delete(self, request, product_id):
+        Product.objects.filter(id=product_id).update(is_active=False)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AdminProductCreateView(APIView):
+    """Admin: Create product."""
+    permission_classes = [permissions.IsAdminUser]
+    
+    @extend_schema(
+        request=ProductCreateSerializer,
+        responses={201: ProductDetailSerializer},
+        tags=['Catalog - Admin']
+    )
+    def post(self, request):
+        serializer = ProductCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        product = CatalogService.create_product(serializer.validated_data)
+        
+        return Response(
+            ProductDetailSerializer(product).data,
+            status=status.HTTP_201_CREATED
+        )
+
+
+class AdminBulkUpdateView(APIView):
+    """Admin: Bulk update products."""
+    permission_classes = [permissions.IsAdminUser]
+    
+    @extend_schema(
+        request=ProductBulkUpdateSerializer,
+        responses={200: OpenApiResponse(description='Number of updated products')},
+        tags=['Catalog - Admin']
+    )
+    def post(self, request):
+        serializer = ProductBulkUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        
+        product_ids = data.pop('product_ids')
+        updates = {k: v for k, v in data.items() if v is not None}
+        
+        count = CatalogService.bulk_update_products(product_ids, updates)
+        
+        return Response({'updated': count})
+
+
+class AdminStatisticsView(APIView):
+    """Admin: Catalog statistics."""
+    permission_classes = [permissions.IsAdminUser]
+    
+    @extend_schema(tags=['Catalog - Admin'])
+    def get(self, request):
+        stats = CatalogService.get_catalog_statistics()
+        return Response(stats)

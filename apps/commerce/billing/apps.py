@@ -1,0 +1,9 @@
+"""Commerce Billing App Configuration."""
+from django.apps import AppConfig
+
+
+class BillingConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.commerce.billing'
+    label = 'billing'
+    verbose_name = 'Billing & Payments'
