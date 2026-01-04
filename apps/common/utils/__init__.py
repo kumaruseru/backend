@@ -12,7 +12,7 @@ from .phone import normalize_phone, format_phone_display, mask_phone
 # String
 from .string import (
     truncate, mask_email, 
-    remove_vietnamese_accents, generate_slug_from_vietnamese
+    remove_vietnamese_accents, generate_slug_from_vietnamese, generate_unique_slug
 )
 
 # Generators

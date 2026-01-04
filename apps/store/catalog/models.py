@@ -17,40 +17,7 @@ from django.utils import timezone
 
 from apps.common.core.models import TimeStampedModel, UUIDModel
 from apps.common.core.storage import category_image_path, brand_logo_path, product_image_path
-
-
-def generate_unique_slug(model_class, instance, source_field: str) -> str:
-    """
-    Generate a unique slug for a model instance.
-    
-    This is a shared utility to avoid DRY violations.
-    
-    Args:
-        model_class: The model class to check against
-        instance: The model instance being saved
-        source_field: The field name to generate slug from
-    
-    Returns:
-        A unique slug string
-    """
-    source_value = getattr(instance, source_field, '')
-    base_slug = slugify(source_value, allow_unicode=True)
-    
-    if not base_slug:
-        base_slug = str(uuid.uuid4())[:8]
-    
-    slug = base_slug
-    counter = 1
-    
-    queryset = model_class.objects.all()
-    if instance.pk:
-        queryset = queryset.exclude(pk=instance.pk)
-    
-    while queryset.filter(slug=slug).exists():
-        slug = f"{base_slug}-{counter}"
-        counter += 1
-    
-    return slug
+from apps.common.utils.string import generate_unique_slug
 
 
 class Category(TimeStampedModel):

@@ -71,3 +71,53 @@ def generate_slug_from_vietnamese(text: str) -> str:
     text = remove_vietnamese_accents(text)
     # Generate slug
     return slugify(text, allow_unicode=False)
+
+
+# ==================== Slug Utilities ====================
+
+def generate_unique_slug(model_class, instance, source_field: str) -> str:
+    """
+    Generate a unique slug for a model instance.
+    
+    This is a shared utility for all models that need slugs.
+    
+    Args:
+        model_class: The model class to check against
+        instance: The model instance being saved
+        source_field: The field name to generate slug from
+    
+    Returns:
+        A unique slug string
+    
+    Example:
+        class Product(models.Model):
+            name = models.CharField(max_length=255)
+            slug = models.SlugField(unique=True, blank=True)
+            
+            def save(self, *args, **kwargs):
+                if not self.slug:
+                    self.slug = generate_unique_slug(Product, self, 'name')
+                super().save(*args, **kwargs)
+    """
+    import uuid
+    
+    source_value = getattr(instance, source_field, '')
+    
+    # Use Vietnamese-aware slug generation
+    base_slug = generate_slug_from_vietnamese(source_value)
+    
+    if not base_slug:
+        base_slug = str(uuid.uuid4())[:8]
+    
+    slug = base_slug
+    counter = 1
+    
+    queryset = model_class.objects.all()
+    if instance.pk:
+        queryset = queryset.exclude(pk=instance.pk)
+    
+    while queryset.filter(slug=slug).exists():
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    
+    return slug
