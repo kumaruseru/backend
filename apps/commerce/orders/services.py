@@ -553,7 +553,9 @@ class OrderService:
         subtotal: Decimal
     ) -> Decimal:
         """Calculate shipping fee using Strategy."""
-        strategy = ShippingStrategyFactory.get_strategy('ghn')
+        provider = getattr(settings, 'DEFAULT_SHIPPING_PROVIDER', 'ghn')
+        strategy = ShippingStrategyFactory.get_strategy(provider)
+        
         return strategy.calculate(
             subtotal=subtotal,
             district_id=district_id,

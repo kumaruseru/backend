@@ -32,6 +32,11 @@ class FixedPriceShippingStrategy(ShippingCalculatorStrategy):
     - Base fee + Surcharge for heavy items if subtotal < threshold
     """
     
+    # Constants for weight-based surcharge
+    THRESHOLD_WEIGHT = 2000  # 2kg
+    SURCHARGE_STEP = 500     # 500g
+    SURCHARGE_AMOUNT = Decimal('5000')
+
     def calculate(
         self,
         subtotal: Decimal,
@@ -47,16 +52,10 @@ class FixedPriceShippingStrategy(ShippingCalculatorStrategy):
 
         base_fee = Decimal(getattr(settings, 'DEFAULT_SHIPPING_FEE', 30000))
         
-        # Advanced: Add weight surcharge
-        # Example: +5,000 VND for every 500g over 2kg
-        THRESHOLD_WEIGHT = 2000  # 2kg
-        SURCHARGE_STEP = 500     # 500g
-        SURCHARGE_AMOUNT = Decimal('5000')
-        
-        if weight > THRESHOLD_WEIGHT:
-            extra_weight = weight - THRESHOLD_WEIGHT
-            steps = (extra_weight + SURCHARGE_STEP - 1) // SURCHARGE_STEP
-            surcharge = steps * SURCHARGE_AMOUNT
+        if weight > self.THRESHOLD_WEIGHT:
+            extra_weight = weight - self.THRESHOLD_WEIGHT
+            steps = (extra_weight + self.SURCHARGE_STEP - 1) // self.SURCHARGE_STEP
+            surcharge = steps * self.SURCHARGE_AMOUNT
             return base_fee + surcharge
             
         return base_fee
