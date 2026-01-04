@@ -21,8 +21,11 @@ def sync_view_counts_to_db(self):
     
     Run every 5-10 minutes via Celery Beat.
     This reduces DB writes and row locking during high traffic.
+    
+    IMPORTANT: Uses GETSET for atomic read-and-reset to avoid race conditions.
     """
-    from .models import Product
+    from .models import ProductStat
+    from django.db import models
     
     # Get all view count keys from Redis
     keys_pattern = 'product_views:*'
@@ -40,7 +43,10 @@ def sync_view_counts_to_db(self):
         for key in keys:
             try:
                 product_id = key.decode().split(':')[1]
-                count = int(redis_client.get(key) or 0)
+                
+                # ATOMIC: Get current value and reset to 0 in one operation
+                # This prevents race condition where new views are lost
+                count = int(redis_client.getset(key, 0) or 0)
                 
                 if count > 0:
                     updates.append((product_id, count))
@@ -51,17 +57,18 @@ def sync_view_counts_to_db(self):
         if not updates:
             return 0
         
-        # Bulk update DB
+        # Bulk update DB (using ProductStat, not Product)
         synced_count = 0
         with transaction.atomic():
             for product_id, count in updates:
-                updated = Product.objects.filter(pk=product_id).update(
+                # Ensure ProductStat exists
+                ProductStat.objects.get_or_create(product_id=product_id)
+                
+                updated = ProductStat.objects.filter(product_id=product_id).update(
                     view_count=models.F('view_count') + count
                 )
                 if updated:
                     synced_count += 1
-                    # Reset Redis counter
-                    redis_client.delete(f'product_views:{product_id}')
         
         logger.info(f"Synced view counts for {synced_count} products")
         return synced_count
