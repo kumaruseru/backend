@@ -50,3 +50,32 @@ def delete_product_from_index(sender, instance, **kwargs):
         MeilisearchGateway.delete_product(instance.id)
     except Exception as e:
         logger.warning(f"Failed to delete product from index: {e}")
+
+
+# ==================== Stock Sync ====================
+
+@receiver(post_save, sender='inventory.StockItem')
+def reindex_product_on_stock_change(sender, instance, **kwargs):
+    """
+    Re-index product when stock changes.
+    
+    This ensures in_stock filter stays accurate in Meilisearch.
+    """
+    if not should_index():
+        return
+    
+    try:
+        from .search import MeilisearchGateway
+        from .models import Product
+        
+        # Fetch full product with relations for indexing
+        product = Product.objects.select_related(
+            'category', 'brand'
+        ).prefetch_related('images', 'tags').get(id=instance.product_id)
+        
+        if product.is_active:
+            MeilisearchGateway.index_product(product)
+            logger.debug(f"Re-indexed product {product.id} after stock change")
+    except Exception as e:
+        logger.warning(f"Failed to re-index product after stock change: {e}")
+
