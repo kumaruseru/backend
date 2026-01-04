@@ -232,33 +232,70 @@ class CatalogService:
         limit: int = 50
     ) -> dict:
         """
-        Search products with filters using Postgres Full-Text Search.
+        Search products using Meilisearch.
+        
+        Falls back to Django ORM if Meilisearch is unavailable.
         """
         from django.db import models
+        from django.conf import settings
+        
+        # Try Meilisearch first
+        use_meilisearch = getattr(settings, 'USE_MEILISEARCH', True)
+        
+        if use_meilisearch and query:
+            try:
+                from .search import MeilisearchGateway
+                
+                result = MeilisearchGateway.search(
+                    query=query,
+                    category_id=category_id,
+                    brand_id=brand_id,
+                    min_price=min_price,
+                    max_price=max_price,
+                    in_stock=in_stock,
+                    on_sale=on_sale,
+                    sort=ordering,
+                    limit=limit
+                )
+                
+                # Convert hits to product IDs for ORM fetch (to get full objects)
+                if result['hits']:
+                    product_ids = [UUID(hit['id']) for hit in result['hits']]
+                    
+                    # Fetch full products in order
+                    products_dict = {
+                        str(p.id): p 
+                        for p in Product.objects.filter(id__in=product_ids).select_related(
+                            'category', 'brand'
+                        ).prefetch_related('images')
+                    }
+                    
+                    # Preserve Meilisearch ranking order
+                    products = [products_dict[hit['id']] for hit in result['hits'] if hit['id'] in products_dict]
+                    
+                    return {
+                        'products': products,
+                        'total': result['total'],
+                        'search_time_ms': result['processing_time_ms']
+                    }
+                
+                return {'products': [], 'total': 0}
+                
+            except Exception as e:
+                logger.warning(f"Meilisearch search failed, falling back to ORM: {e}")
+        
+        # Fallback to Django ORM
         queryset = Product.objects.active().select_related('category', 'brand')
         
-        # Full-Text Search (Postgres FTS) for better performance
+        # Text search via icontains
         if query:
-            try:
-                from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
-                
-                search_vector = SearchVector('name', weight='A') + \
-                               SearchVector('sku', weight='B') + \
-                               SearchVector('description', weight='D')
-                search_query = SearchQuery(query, config='simple')
-                
-                queryset = queryset.annotate(
-                    search_rank=SearchRank(search_vector, search_query)
-                ).filter(search_rank__gte=0.001).order_by('-search_rank')
-            except ImportError:
-                # Fallback to icontains if postgres search not available
-                queryset = queryset.filter(
-                    Q(name__icontains=query) |
-                    Q(description__icontains=query) |
-                    Q(sku__icontains=query) |
-                    Q(brand__name__icontains=query) |
-                    Q(tags__name__icontains=query)
-                ).distinct()
+            queryset = queryset.filter(
+                Q(name__icontains=query) |
+                Q(description__icontains=query) |
+                Q(sku__icontains=query) |
+                Q(brand__name__icontains=query) |
+                Q(tags__name__icontains=query)
+            ).distinct()
         
         # Category filter
         if category_id:
@@ -272,7 +309,7 @@ class CatalogService:
         if brand_id:
             queryset = queryset.filter(brand_id=brand_id)
         
-        # Price range using effective_price (denormalized)
+        # Price range
         if min_price is not None:
             queryset = queryset.filter(effective_price__gte=min_price)
         if max_price is not None:
@@ -289,7 +326,7 @@ class CatalogService:
                 sale_price__gt=0
             ).exclude(sale_price__gte=models.F('price'))
         
-        # Ordering - use effective_price for price sorting
+        # Ordering
         valid_orderings = {
             'price': 'effective_price',
             '-price': '-effective_price',
@@ -301,8 +338,7 @@ class CatalogService:
             'rating': '-average_rating'
         }
         order_field = valid_orderings.get(ordering, '-created_at')
-        if not query:  # Don't override search rank ordering
-            queryset = queryset.order_by(order_field)
+        queryset = queryset.order_by(order_field)
         
         total = queryset.count()
         products = list(queryset.prefetch_related('images')[:limit])

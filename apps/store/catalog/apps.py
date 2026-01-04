@@ -8,3 +8,8 @@ class CatalogConfig(AppConfig):
     name = 'apps.store.catalog'
     label = 'catalog'
     verbose_name = 'Product Catalog'
+    
+    def ready(self):
+        # Register signals for Meilisearch indexing
+        from . import signals  # noqa: F401
+
