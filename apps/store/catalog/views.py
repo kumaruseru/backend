@@ -25,6 +25,7 @@ from .serializers import (
     CatalogFiltersSerializer, ProductSearchSerializer
 )
 from .services import CatalogService
+from .selectors import CatalogSelector
 from .filters import ProductFilter
 
 
@@ -58,9 +59,7 @@ class CategoryTreeView(APIView):
         tags=['Catalog - Categories']
     )
     def get(self, request):
-        categories = CatalogService.get_category_tree(
-            include_empty=request.query_params.get('include_empty', 'false').lower() == 'true'
-        )
+        categories = CatalogSelector.get_category_tree()
         return Response(CategoryTreeSerializer(categories, many=True).data)
 
 
@@ -91,8 +90,8 @@ class CategoryFiltersView(APIView):
     )
     def get(self, request, slug):
         try:
-            category = CatalogService.get_category_by_slug(slug)
-            filters = CatalogService.get_category_filters(category)
+            category = CatalogSelector.get_category_by_slug(slug)
+            filters = CatalogSelector.get_category_filters(category)
             
             return Response({
                 'category': CategorySimpleSerializer(category).data,
@@ -234,7 +233,7 @@ class FeaturedProductsView(generics.ListAPIView):
     
     def get_queryset(self):
         limit = int(self.request.query_params.get('limit', 12))
-        return CatalogService.get_featured_products(limit)
+        return CatalogSelector.get_featured_products(limit)
     
     @extend_schema(
         parameters=[OpenApiParameter('limit', int)],
@@ -254,7 +253,7 @@ class NewArrivalsView(generics.ListAPIView):
     def get_queryset(self):
         limit = int(self.request.query_params.get('limit', 12))
         days = int(self.request.query_params.get('days', 30))
-        return CatalogService.get_new_arrivals(limit, days)
+        return CatalogSelector.get_new_arrivals(limit, days)
     
     @extend_schema(
         parameters=[
@@ -276,7 +275,7 @@ class BestsellersView(generics.ListAPIView):
     
     def get_queryset(self):
         limit = int(self.request.query_params.get('limit', 12))
-        return CatalogService.get_bestsellers(limit)
+        return CatalogSelector.get_bestsellers(limit)
     
     @extend_schema(
         parameters=[OpenApiParameter('limit', int)],
@@ -295,7 +294,7 @@ class OnSaleProductsView(generics.ListAPIView):
     
     def get_queryset(self):
         limit = int(self.request.query_params.get('limit', 12))
-        return CatalogService.get_on_sale_products(limit)
+        return CatalogSelector.get_on_sale_products(limit)
     
     @extend_schema(
         parameters=[OpenApiParameter('limit', int)],
@@ -318,7 +317,7 @@ class RelatedProductsView(generics.ListAPIView):
         
         try:
             product = Product.objects.get(slug=slug)
-            return CatalogService.get_related_products(product, limit)
+            return CatalogSelector.get_related_products(product, limit)
         except Product.DoesNotExist:
             return Product.objects.none()
     
@@ -388,13 +387,9 @@ class SearchSuggestionsView(APIView):
         if len(query) < 2:
             return Response({'products': [], 'categories': [], 'brands': []})
         
-        result = CatalogService.get_search_suggestions(query)
+        result = CatalogSelector.search_suggestions(query)
         
-        return Response({
-            'products': ProductCardSerializer(result['products'], many=True).data,
-            'categories': CategorySimpleSerializer(result['categories'], many=True).data,
-            'brands': BrandSimpleSerializer(result['brands'], many=True).data
-        })
+        return Response(result)
 
 
 # ==================== Admin Endpoints ====================

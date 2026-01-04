@@ -59,9 +59,11 @@ def normalize_user_data(sender, instance, **kwargs):
     """
     Normalize user data before saving.
     - Email to lowercase
-    - Phone formatting
+    - Phone formatting (using common utils)
     - Name trimming
     """
+    from apps.common.utils.phone import normalize_phone
+    
     if instance.email:
         instance.email = instance.email.lower().strip()
     
@@ -71,13 +73,9 @@ def normalize_user_data(sender, instance, **kwargs):
     if instance.last_name:
         instance.last_name = instance.last_name.strip()
     
-    # Format phone number
+    # Format phone number using centralized utility
     if instance.phone:
-        phone = instance.phone.strip()
-        # Convert 0xxx to +84xxx if Vietnamese
-        if phone.startswith('0') and len(phone) == 10:
-            phone = '+84' + phone[1:]
-        instance.phone = phone
+        instance.phone = normalize_phone(instance.phone)
 
 
 @receiver(post_save, sender=User)
