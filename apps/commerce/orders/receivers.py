@@ -12,9 +12,37 @@ from apps.commerce.shipping.signals import (
     shipment_cancelled,
     cod_collected
 )
+from apps.commerce.billing.signals import (
+    payment_completed,
+    payment_failed
+)
 from .models import Order
 
 logger = logging.getLogger('apps.orders')
+
+
+# ==================== Payment Signal Receivers ====================
+
+@receiver(payment_completed)
+def on_payment_completed(sender, payment, **kwargs):
+    """
+    Handle payment completion - update order status.
+    
+    This decouples Billing from Orders.
+    """
+    order = payment.order
+    try:
+        order.mark_as_paid(payment.transaction_id or str(payment.id))
+        logger.info(f"Order {order.order_number} marked as paid via payment signal")
+    except Exception as e:
+        logger.error(f"Failed to update order {order.order_number} payment status: {e}")
+
+
+@receiver(payment_failed)
+def on_payment_failed(sender, payment, reason='', **kwargs):
+    """Handle payment failure notification."""
+    order = payment.order
+    logger.warning(f"Payment failed for order {order.order_number}: {reason}")
 
 
 # ==================== Shipment Signal Receivers ====================

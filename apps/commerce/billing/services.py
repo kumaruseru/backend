@@ -241,7 +241,9 @@ class PaymentService:
                 return {'success': False, 'error': 'Missing payment ID'}
             
             try:
-                payment = Payment.objects.select_related('order').get(id=payment_id)
+                # RACE CONDITION FIX: Use select_for_update to lock row
+                # Prevents double-processing if webhooks arrive simultaneously
+                payment = Payment.objects.select_for_update().select_related('order').get(id=payment_id)
             except Payment.DoesNotExist:
                 logger.warning(f"Payment not found: {payment_id}")
                 return {'success': False, 'error': 'Payment not found'}

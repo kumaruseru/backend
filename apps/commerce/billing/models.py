@@ -207,8 +207,9 @@ class Payment(UUIDModel):
             'provider_data', 'updated_at'
         ])
         
-        # Update order payment status
-        self.order.mark_as_paid(transaction_id or str(self.id))
+        # Emit signal for Order to handle (DECOUPLED)
+        from .signals import payment_completed
+        payment_completed.send(sender=self.__class__, payment=self)
         
         self._log_event('completed', old_status)
         
