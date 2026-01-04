@@ -577,8 +577,15 @@ class ShippingService:
             except:
                 pass
         
-        # Update order status
-        ShippingService._sync_order_status(shipment, new_status, result)
+        # Update order status via SIGNAL (decoupled)
+        from .signals import shipment_status_changed
+        shipment_status_changed.send(
+            sender=Shipment,
+            shipment=shipment,
+            old_status=old_status,
+            new_status=new_status,
+            webhook_data=result
+        )
         
         # Create delivery attempt if failed
         if new_status == Shipment.Status.FAILED:
@@ -607,35 +614,20 @@ class ShippingService:
         shipping_status: str,
         webhook_data: Dict
     ) -> None:
-        """Sync order status with shipment status."""
-        order = shipment.order
+        """
+        DEPRECATED: Use shipment_status_changed signal instead.
         
-        status_map = {
-            Shipment.Status.PICKED_UP: Order.Status.SHIPPING,
-            Shipment.Status.IN_TRANSIT: Order.Status.SHIPPING,
-            Shipment.Status.SORTING: Order.Status.SHIPPING,
-            Shipment.Status.OUT_FOR_DELIVERY: Order.Status.SHIPPING,
-            Shipment.Status.DELIVERED: Order.Status.DELIVERED,
-        }
-        
-        new_order_status = status_map.get(shipping_status)
-        
-        if new_order_status and order.status != new_order_status:
-            if shipping_status == Shipment.Status.DELIVERED:
-                order.deliver()
-                
-                # Mark as paid if COD
-                if order.payment_method == Order.PaymentMethod.COD:
-                    order.payment_status = Order.PaymentStatus.PAID
-                    order.save(update_fields=['payment_status', 'updated_at'])
-            
-            elif shipping_status in [
-                Shipment.Status.PICKED_UP,
-                Shipment.Status.IN_TRANSIT,
-                Shipment.Status.OUT_FOR_DELIVERY
-            ]:
-                if order.status == Order.Status.CONFIRMED:
-                    order.ship(shipment.tracking_code)
+        This method is kept for backward compatibility.
+        Order sync is now handled by orders/receivers.py
+        """
+        from .signals import shipment_status_changed
+        shipment_status_changed.send(
+            sender=Shipment,
+            shipment=shipment,
+            old_status=None,
+            new_status=shipping_status,
+            webhook_data=webhook_data
+        )
     
     @staticmethod
     def cancel_shipment(shipment: Shipment, reason: str = '') -> Shipment:

@@ -18,7 +18,17 @@ def should_index():
 
 @receiver(post_save, sender='catalog.Product')
 def index_product_on_save(sender, instance, created, **kwargs):
-    """Index product to Meilisearch on save."""
+    """Index product to Meilisearch on save and invalidate caches."""
+    # Invalidate selector caches
+    try:
+        from .selectors import CatalogSelector
+        CatalogSelector.invalidate_product_caches(
+            product_id=str(instance.id),
+            product_slug=instance.slug
+        )
+    except Exception as e:
+        logger.warning(f"Failed to invalidate cache: {e}")
+    
     if not should_index():
         return
     

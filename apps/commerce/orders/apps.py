@@ -7,3 +7,8 @@ class OrdersConfig(AppConfig):
     name = 'apps.commerce.orders'
     label = 'orders'
     verbose_name = 'Order Management'
+    
+    def ready(self):
+        """Register signal receivers."""
+        from . import receivers  # noqa: F401
+
