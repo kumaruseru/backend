@@ -599,32 +599,26 @@ class OrderService:
         except Coupon.DoesNotExist:
             raise BusinessRuleViolation(message='Mã giảm giá không tồn tại')
     
-    # --- Notifications ---
+    # --- Notifications (via Signals) ---
     
     @staticmethod
     def _notify_order_created(order: Order) -> None:
-        """Send order created notification."""
-        try:
-            from apps.users.notifications.services import EmailService
-            # TODO: Implement order confirmation email
-            logger.debug(f"Order created notification for {order.order_number}")
-        except Exception as e:
-            logger.warning(f"Failed to send order created notification: {e}")
+        """Emit order created signal for decoupled handling."""
+        from apps.commerce.orders.signals import order_created
+        order_created.send(sender=OrderService, order=order, user=order.user)
+        logger.debug(f"Signal order_created emitted for {order.order_number}")
     
     @staticmethod
     def _notify_order_confirmed(order: Order) -> None:
-        """Send order confirmed notification."""
-        try:
-            from apps.users.notifications.services import EmailService
-            logger.debug(f"Order confirmed notification for {order.order_number}")
-        except Exception as e:
-            logger.warning(f"Failed to send order confirmed notification: {e}")
+        """Emit order confirmed signal."""
+        from apps.commerce.orders.signals import order_confirmed
+        order_confirmed.send(sender=OrderService, order=order)
+        logger.debug(f"Signal order_confirmed emitted for {order.order_number}")
     
     @staticmethod
-    def _notify_order_cancelled(order: Order) -> None:
-        """Send order cancelled notification."""
-        try:
-            from apps.users.notifications.services import EmailService
-            logger.debug(f"Order cancelled notification for {order.order_number}")
-        except Exception as e:
-            logger.warning(f"Failed to send order cancelled notification: {e}")
+    def _notify_order_cancelled(order: Order, reason: str = '') -> None:
+        """Emit order cancelled signal."""
+        from apps.commerce.orders.signals import order_cancelled
+        order_cancelled.send(sender=OrderService, order=order, reason=reason)
+        logger.debug(f"Signal order_cancelled emitted for {order.order_number}")
+

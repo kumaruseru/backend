@@ -117,37 +117,46 @@ class CatalogService:
     @staticmethod
     def increment_product_view_count(product: Product):
         """
-        Increment view count logic (moved from Model).
+        Increment view count in ProductStat (Vertical Partitioning).
         Uses Redis for buffer if available.
         """
         from django.db.models import F
         from django.core.cache import cache
+        from .models import ProductStat
         
         cache_key = f'product_views:{product.pk}'
         try:
             # Increment in Redis
             new_count = cache.incr(cache_key)
             
-            # Sync to DB every 10 views
+            # Sync to DB every 10 views (updates ProductStat, not Product)
             if new_count % 10 == 0:
-                Product.objects.filter(pk=product.pk).update(
+                ProductStat.objects.filter(product_id=product.pk).update(
                     view_count=F('view_count') + 10
                 )
                 cache.set(cache_key, 0, timeout=3600)
         except (ValueError, TypeError):
             # Key doesn't exist or Redis issue, fallback to direct update
             cache.set(cache_key, 1, timeout=3600)
-            Product.objects.filter(pk=product.pk).update(
+            # Ensure ProductStat exists, then update
+            ProductStat.objects.get_or_create(product_id=product.pk)
+            ProductStat.objects.filter(product_id=product.pk).update(
                 view_count=F('view_count') + 1
             )
 
     @staticmethod
     def increment_product_sold_count(product_id: UUID, quantity: int = 1):
         """
-        Increment sold count atomically.
+        Increment sold count atomically in ProductStat.
         """
         from django.db.models import F
-        Product.objects.filter(pk=product_id).update(sold_count=F('sold_count') + quantity)
+        from .models import ProductStat
+        
+        # Ensure ProductStat exists
+        ProductStat.objects.get_or_create(product_id=product_id)
+        ProductStat.objects.filter(product_id=product_id).update(
+            sold_count=F('sold_count') + quantity
+        )
     
     @staticmethod
     def get_product_by_id(product_id: UUID) -> Product:

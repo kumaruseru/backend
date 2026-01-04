@@ -648,3 +648,41 @@ class ProductImage(TimeStampedModel):
                 is_primary=True
             ).exclude(pk=self.pk).update(is_primary=False)
         super().save(*args, **kwargs)
+
+
+class ProductStat(models.Model):
+    """
+    Product statistics (Vertical Partitioning).
+    
+    Separated from Product to avoid lock contention on:
+    - view_count updates (high frequency)
+    - sold_count updates (order completion)
+    
+    This keeps the main Product table free for 
+    important mutations (price, stock).
+    """
+    
+    product = models.OneToOneField(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='stats',
+        primary_key=True,
+        verbose_name='Sản phẩm'
+    )
+    view_count = models.PositiveIntegerField(default=0, verbose_name='Lượt xem')
+    sold_count = models.PositiveIntegerField(default=0, verbose_name='Đã bán')
+    
+    # Denormalized rating stats (updated via signal on Review save)
+    rating_avg = models.DecimalField(
+        max_digits=3, decimal_places=2, default=Decimal('0.00'),
+        verbose_name='Điểm TB'
+    )
+    rating_count = models.PositiveIntegerField(default=0, verbose_name='Số đánh giá')
+    
+    class Meta:
+        verbose_name = 'Thống kê sản phẩm'
+        verbose_name_plural = 'Thống kê sản phẩm'
+    
+    def __str__(self) -> str:
+        return f"Stats for {self.product_id}"
+
