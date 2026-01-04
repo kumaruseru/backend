@@ -19,6 +19,40 @@ from apps.common.core.models import TimeStampedModel, UUIDModel
 from apps.common.core.storage import category_image_path, brand_logo_path, product_image_path
 
 
+def generate_unique_slug(model_class, instance, source_field: str) -> str:
+    """
+    Generate a unique slug for a model instance.
+    
+    This is a shared utility to avoid DRY violations.
+    
+    Args:
+        model_class: The model class to check against
+        instance: The model instance being saved
+        source_field: The field name to generate slug from
+    
+    Returns:
+        A unique slug string
+    """
+    source_value = getattr(instance, source_field, '')
+    base_slug = slugify(source_value, allow_unicode=True)
+    
+    if not base_slug:
+        base_slug = str(uuid.uuid4())[:8]
+    
+    slug = base_slug
+    counter = 1
+    
+    queryset = model_class.objects.all()
+    if instance.pk:
+        queryset = queryset.exclude(pk=instance.pk)
+    
+    while queryset.filter(slug=slug).exists():
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    
+    return slug
+
+
 class Category(TimeStampedModel):
     """
     Product category with hierarchical structure.
@@ -89,12 +123,7 @@ class Category(TimeStampedModel):
     
     def save(self, *args, **kwargs):
         if not self.slug:
-            self.slug = slugify(self.name, allow_unicode=True)
-            original_slug = self.slug
-            counter = 1
-            while Category.objects.filter(slug=self.slug).exclude(pk=self.pk).exists():
-                self.slug = f"{original_slug}-{counter}"
-                counter += 1
+            self.slug = generate_unique_slug(Category, self, 'name')
         super().save(*args, **kwargs)
     
     @property
@@ -177,7 +206,7 @@ class Brand(TimeStampedModel):
     
     def save(self, *args, **kwargs):
         if not self.slug:
-            self.slug = slugify(self.name, allow_unicode=True)
+            self.slug = generate_unique_slug(Brand, self, 'name')
         super().save(*args, **kwargs)
     
     @property
@@ -203,7 +232,7 @@ class ProductTag(TimeStampedModel):
     
     def save(self, *args, **kwargs):
         if not self.slug:
-            self.slug = slugify(self.name, allow_unicode=True)
+            self.slug = generate_unique_slug(ProductTag, self, 'name')
         super().save(*args, **kwargs)
 
 
@@ -448,12 +477,7 @@ class Product(UUIDModel):
     def save(self, *args, **kwargs):
         # Auto-generate slug if not provided
         if not self.slug:
-            base_slug = slugify(self.name, allow_unicode=True)
-            self.slug = base_slug
-            counter = 1
-            while Product.objects.filter(slug=self.slug).exclude(pk=self.pk).exists():
-                self.slug = f"{base_slug}-{counter}"
-                counter += 1
+            self.slug = generate_unique_slug(Product, self, 'name')
         
         # Calculate effective_price for fast sorting
         self._update_effective_price()
