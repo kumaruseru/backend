@@ -188,19 +188,33 @@ class CatalogService:
         limit: int = 50
     ) -> dict:
         """
-        Search products with filters.
+        Search products with filters using Postgres Full-Text Search.
         """
+        from django.db import models
         queryset = Product.objects.active().select_related('category', 'brand')
         
-        # Text search
+        # Full-Text Search (Postgres FTS) for better performance
         if query:
-            queryset = queryset.filter(
-                Q(name__icontains=query) |
-                Q(description__icontains=query) |
-                Q(sku__icontains=query) |
-                Q(brand__name__icontains=query) |
-                Q(tags__name__icontains=query)
-            ).distinct()
+            try:
+                from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
+                
+                search_vector = SearchVector('name', weight='A') + \
+                               SearchVector('sku', weight='B') + \
+                               SearchVector('description', weight='D')
+                search_query = SearchQuery(query, config='simple')
+                
+                queryset = queryset.annotate(
+                    search_rank=SearchRank(search_vector, search_query)
+                ).filter(search_rank__gte=0.001).order_by('-search_rank')
+            except ImportError:
+                # Fallback to icontains if postgres search not available
+                queryset = queryset.filter(
+                    Q(name__icontains=query) |
+                    Q(description__icontains=query) |
+                    Q(sku__icontains=query) |
+                    Q(brand__name__icontains=query) |
+                    Q(tags__name__icontains=query)
+                ).distinct()
         
         # Category filter
         if category_id:
@@ -214,17 +228,11 @@ class CatalogService:
         if brand_id:
             queryset = queryset.filter(brand_id=brand_id)
         
-        # Price range
+        # Price range using effective_price (denormalized)
         if min_price is not None:
-            queryset = queryset.filter(
-                Q(sale_price__gte=min_price) |
-                Q(sale_price__isnull=True, price__gte=min_price)
-            )
+            queryset = queryset.filter(effective_price__gte=min_price)
         if max_price is not None:
-            queryset = queryset.filter(
-                Q(sale_price__lte=max_price, sale_price__gt=0) |
-                Q(sale_price__isnull=True, price__lte=max_price)
-            )
+            queryset = queryset.filter(effective_price__lte=max_price)
         
         # Stock filter
         if in_stock is True:
@@ -237,10 +245,10 @@ class CatalogService:
                 sale_price__gt=0
             ).exclude(sale_price__gte=models.F('price'))
         
-        # Ordering
+        # Ordering - use effective_price for price sorting
         valid_orderings = {
-            'price': 'price',
-            '-price': '-price',
+            'price': 'effective_price',
+            '-price': '-effective_price',
             'name': 'name',
             '-name': '-name',
             'created': 'created_at',
@@ -249,7 +257,8 @@ class CatalogService:
             'rating': '-average_rating'
         }
         order_field = valid_orderings.get(ordering, '-created_at')
-        queryset = queryset.order_by(order_field)
+        if not query:  # Don't override search rank ordering
+            queryset = queryset.order_by(order_field)
         
         total = queryset.count()
         products = list(queryset.prefetch_related('images')[:limit])

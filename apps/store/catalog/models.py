@@ -415,6 +415,16 @@ class Product(UUIDModel):
     view_count = models.PositiveIntegerField(default=0, verbose_name='Lượt xem')
     sold_count = models.PositiveIntegerField(default=0, verbose_name='Đã bán')
     
+    # Denormalized price for fast sorting/filtering
+    effective_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=0,
+        default=0,
+        db_index=True,
+        editable=False,
+        verbose_name='Giá thực tế'
+    )
+    
     class Meta:
         verbose_name = 'Sản phẩm'
         verbose_name_plural = 'Sản phẩm'
@@ -428,12 +438,15 @@ class Product(UUIDModel):
             models.Index(fields=['is_active', '-sold_count']),
             models.Index(fields=['price']),
             models.Index(fields=['sale_price']),
+            models.Index(fields=['effective_price']),
+            models.Index(fields=['is_active', 'effective_price']),
         ]
     
     def __str__(self) -> str:
         return self.name
     
     def save(self, *args, **kwargs):
+        # Auto-generate slug if not provided
         if not self.slug:
             base_slug = slugify(self.name, allow_unicode=True)
             self.slug = base_slug
@@ -441,7 +454,31 @@ class Product(UUIDModel):
             while Product.objects.filter(slug=self.slug).exclude(pk=self.pk).exists():
                 self.slug = f"{base_slug}-{counter}"
                 counter += 1
+        
+        # Calculate effective_price for fast sorting
+        self._update_effective_price()
+        
         super().save(*args, **kwargs)
+    
+    def _update_effective_price(self):
+        """Update denormalized effective_price for fast DB sorting."""
+        if self._is_sale_currently_active():
+            self.effective_price = self.sale_price
+        else:
+            self.effective_price = self.price
+    
+    def _is_sale_currently_active(self) -> bool:
+        """Check sale status without triggering property."""
+        if not self.sale_price or self.sale_price <= 0:
+            return False
+        if self.price and self.sale_price >= self.price:
+            return False
+        now = timezone.now()
+        if self.sale_start and now < self.sale_start:
+            return False
+        if self.sale_end and now > self.sale_end:
+            return False
+        return True
     
     # --- Computed Properties ---
     
