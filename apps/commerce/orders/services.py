@@ -20,6 +20,8 @@ from django.conf import settings
 from apps.common.core.exceptions import (
     NotFoundError, BusinessRuleViolation, ValidationError
 )
+from apps.store.inventory.services import InventoryService
+from apps.commerce.shipping.strategies import ShippingStrategyFactory
 from apps.store.catalog.models import Product
 from apps.commerce.cart.models import Cart
 from .models import Order, OrderItem, OrderStatusHistory, OrderNote
@@ -43,28 +45,15 @@ class OrderService:
     def create_order_from_cart(
         user,
         shipping_info: Dict[str, Any],
-        payment_method: str = 'cod',
+        payment_method: str = Order.PaymentMethod.COD,
         coupon_code: str = '',
         customer_note: str = '',
-        source: str = 'web',
+        source: str = Order.Source.WEB,
         ip_address: str = '',
         user_agent: str = ''
     ) -> Order:
         """
         Create order from user's cart.
-        
-        Args:
-            user: Authenticated user
-            shipping_info: Recipient, address, phone, etc.
-            payment_method: Payment method code
-            coupon_code: Optional coupon code
-            customer_note: Customer notes
-            source: Order source (web, mobile, api)
-            ip_address: Client IP
-            user_agent: Client user agent
-            
-        Returns:
-            Created Order
         """
         # Get cart
         try:
@@ -89,14 +78,13 @@ class OrderService:
                     message=f'Sản phẩm "{product.name}" không còn bán'
                 )
             
-            # Check stock with row lock to prevent race condition
+            # Check stock decoupled
             if hasattr(product, 'stock'):
-                from apps.store.inventory.models import ProductStock
-                stock = ProductStock.objects.select_for_update().get(product=product)
-                available = stock.available_quantity
-                if cart_item.quantity > available:
+                if not InventoryService.check_stock_availability(product.id, cart_item.quantity):
+                    # We can fetch available quantity if needed for message, 
+                    # but simple boolean check is faster for high concurrency validation
                     raise BusinessRuleViolation(
-                        message=f'Sản phẩm "{product.name}" chỉ còn {available} trong kho'
+                        message=f'Sản phẩm "{product.name}" không đủ số lượng trong kho'
                     )
             
             price = product.sale_price or product.price
@@ -108,7 +96,7 @@ class OrderService:
             })
             subtotal += price * cart_item.quantity
         
-        # Calculate shipping fee
+        # Calculate shipping fee using Strategy
         shipping_fee = OrderService._calculate_shipping_fee(
             shipping_info.get('district_id'),
             shipping_info.get('ward_code'),
@@ -159,7 +147,7 @@ class OrderService:
             user_agent=user_agent
         )
         
-        # Create order items using bulk_create for performance
+        # Create order items
         order_items = []
         for item_data in items_data:
             product = item_data['product']
@@ -176,11 +164,17 @@ class OrderService:
             ))
         OrderItem.objects.bulk_create(order_items)
         
-        # Reserve stock
+        # Reserve stock via Service
         for item_data in items_data:
             product = item_data['product']
             if hasattr(product, 'stock'):
-                product.stock.reserve(item_data['quantity'], order.order_number)
+                # Reserve stock using service
+                InventoryService.reserve_stock(
+                    product_id=product.id,
+                    quantity=item_data['quantity'],
+                    reference=order.order_number,
+                    user=user
+                )
         
         # Use coupon
         if coupon:
@@ -213,15 +207,13 @@ class OrderService:
         user,
         items: List[Dict],
         shipping_info: Dict[str, Any],
-        payment_method: str = 'cod',
+        payment_method: str = Order.PaymentMethod.COD,
         coupon_code: str = '',
         customer_note: str = '',
-        source: str = 'web'
+        source: str = Order.Source.WEB
     ) -> Order:
         """
         Create order directly from items (without cart).
-        
-        For quick buy / reorder functionality.
         """
         if not items:
             raise BusinessRuleViolation(message='Không có sản phẩm')
@@ -239,10 +231,9 @@ class OrderService:
             
             # Check stock
             if hasattr(product, 'stock'):
-                available = product.stock.available_quantity
-                if quantity > available:
+                if not InventoryService.check_stock_availability(product.id, quantity):
                     raise BusinessRuleViolation(
-                        message=f'"{product.name}" chỉ còn {available} trong kho'
+                         message=f'"{product.name}" không đủ số lượng trong kho'
                     )
             
             price = product.sale_price or product.price
@@ -310,9 +301,17 @@ class OrderService:
                 unit_price=item_data['unit_price'],
                 original_price=item_data['original_price']
             )
-            
+        
+        # Reserve stock
+        for item_data in items_data:
+            product = item_data['product']
             if hasattr(product, 'stock'):
-                product.stock.reserve(item_data['quantity'], order.order_number)
+                InventoryService.reserve_stock(
+                    product_id=product.id,
+                    quantity=item_data['quantity'],
+                    reference=order.order_number,
+                    user=user
+                )
         
         if coupon:
             coupon.increment_usage()
@@ -466,7 +465,7 @@ class OrderService:
             items=items,
             shipping_info=shipping_info,
             payment_method=original_order.payment_method,
-            source='web'
+            source=Order.Source.WEB
         )
     
     # --- Notes ---
@@ -506,19 +505,19 @@ class OrderService:
         
         stats = queryset.aggregate(
             total_orders=Count('id'),
-            total_revenue=Sum('total', filter=Q(status__in=['delivered', 'completed'])),
-            avg_order_value=Avg('total', filter=Q(status__in=['delivered', 'completed'])),
-            pending=Count('id', filter=Q(status='pending')),
-            confirmed=Count('id', filter=Q(status='confirmed')),
-            processing=Count('id', filter=Q(status='processing')),
-            shipping=Count('id', filter=Q(status='shipping')),
-            delivered=Count('id', filter=Q(status='delivered')),
-            completed=Count('id', filter=Q(status='completed')),
-            cancelled=Count('id', filter=Q(status='cancelled')),
-            paid_orders=Count('id', filter=Q(payment_status='paid')),
-            unpaid_orders=Count('id', filter=Q(payment_status='unpaid')),
-            cod_orders=Count('id', filter=Q(payment_method='cod')),
-            online_orders=Count('id', filter=~Q(payment_method='cod'))
+            total_revenue=Sum('total', filter=Q(status__in=[Order.Status.DELIVERED, Order.Status.COMPLETED])),
+            avg_order_value=Avg('total', filter=Q(status__in=[Order.Status.DELIVERED, Order.Status.COMPLETED])),
+            pending=Count('id', filter=Q(status=Order.Status.PENDING)),
+            confirmed=Count('id', filter=Q(status=Order.Status.CONFIRMED)),
+            processing=Count('id', filter=Q(status=Order.Status.PROCESSING)),
+            shipping=Count('id', filter=Q(status=Order.Status.SHIPPING)),
+            delivered=Count('id', filter=Q(status=Order.Status.DELIVERED)),
+            completed=Count('id', filter=Q(status=Order.Status.COMPLETED)),
+            cancelled=Count('id', filter=Q(status=Order.Status.CANCELLED)),
+            paid_orders=Count('id', filter=Q(payment_status=Order.PaymentStatus.PAID)),
+            unpaid_orders=Count('id', filter=Q(payment_status=Order.PaymentStatus.UNPAID)),
+            cod_orders=Count('id', filter=Q(payment_method=Order.PaymentMethod.COD)),
+            online_orders=Count('id', filter=~Q(payment_method=Order.PaymentMethod.COD))
         )
         
         total = stats['total_orders'] or 1
@@ -553,44 +552,14 @@ class OrderService:
         ward_code: str,
         subtotal: Decimal
     ) -> Decimal:
-        """Calculate shipping fee using GHN."""
-        # Free shipping for orders over threshold
-        free_shipping_threshold = getattr(settings, 'FREE_SHIPPING_THRESHOLD', 500000)
-        if subtotal >= free_shipping_threshold:
-            return Decimal('0')
-        
-        try:
-            from apps.commerce.shipping.services import GHNService
-            ghn = GHNService()
-            result = ghn.calculate_fee(
-                to_district_id=district_id,
-                to_ward_code=ward_code,
-                weight=500
-            )
-            if result.get('success'):
-                return Decimal(result.get('total', 30000))
-            else:
-                error_msg = result.get('error', 'Không thể tính phí vận chuyển')
-                logger.error(f"GHN fee calculation failed: {error_msg}")
-                raise BusinessRuleViolation(
-                    message=f'Không thể tính phí vận chuyển: {error_msg}. Vui lòng thử lại.'
-                )
-        except BusinessRuleViolation:
-            raise
-        except Exception as e:
-            logger.error(f"Shipping fee calculation failed: {e}")
-            # Alert admins if GHN is down
-            try:
-                import sentry_sdk
-                sentry_sdk.capture_message(
-                    f"GHN API Down - Shipping fee calculation failed: {e}",
-                    level="error"
-                )
-            except Exception:
-                pass
-            raise BusinessRuleViolation(
-                message='Hệ thống vận chuyển tạm thời không khả dụng. Vui lòng thử lại sau.'
-            )
+        """Calculate shipping fee using Strategy."""
+        strategy = ShippingStrategyFactory.get_strategy('ghn')
+        return strategy.calculate(
+            subtotal=subtotal,
+            district_id=district_id,
+            ward_code=ward_code,
+            weight=500  # Default weight
+        )
     
     @staticmethod
     def _apply_coupon(

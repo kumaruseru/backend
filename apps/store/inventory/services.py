@@ -38,6 +38,18 @@ class InventoryService:
             return queryset.get(product_id=product_id)
         except StockItem.DoesNotExist:
             raise NotFoundError(message='Không tìm thấy thông tin tồn kho')
+
+    @staticmethod
+    def check_stock_availability(product_id: UUID, quantity: int, warehouse_id: int = None) -> bool:
+        """
+        Check if enough stock is available.
+        Does not lock rows. Safe for read-only checks.
+        """
+        try:
+            stock = InventoryService.get_stock(product_id, warehouse_id)
+            return stock.available_quantity >= quantity
+        except NotFoundError:
+            return False
     
     @staticmethod
     def get_or_create_stock(product_id: UUID, warehouse_id: int = None) -> StockItem:
