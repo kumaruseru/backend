@@ -37,50 +37,51 @@ class PrivateMediaStorage(S3Boto3Storage):
 
 # ==================== Upload Path Generators ====================
 
-def user_avatar_path(instance, filename: str) -> str:
-    """Generate path for user avatar uploads."""
-    ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
-    new_filename = f"{uuid.uuid4()}.{ext}"
-    return f"avatars/{instance.id}/{new_filename}"
+# ==================== Upload Path Generators ====================
+
+def get_upload_path(directory: str, id_field='id') -> callable:
+    """
+    Factory to generate upload path functions.
+    
+    Args:
+        directory: Target directory (e.g., 'avatars', 'products')
+        id_field: Field to use for sub-directory (default: 'id')
+                  Can be a specific field name or 'pk'.
+                  Can also handle special cases via custom logic check in wrapper if needed.
+    """
+    def wrapper(instance, filename: str) -> str:
+        ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
+        new_filename = f"{uuid.uuid4()}.{ext}"
+        
+        # Determine ID based on instance type and configuration
+        obj_id = 'unknown'
+        
+        # Handle specific cases first
+        if directory == 'products' and hasattr(instance, 'product_id'):
+             obj_id = instance.product_id
+        elif directory == 'reviews' and hasattr(instance, 'review_id'):
+             obj_id = instance.review_id
+        elif directory == 'returns' and hasattr(instance, 'return_request_id'):
+             obj_id = instance.return_request_id
+        elif directory == 'invoices' and hasattr(instance, 'order_id'):
+            obj_id = instance.order_id
+        elif directory == 'blog' and not getattr(instance, 'slug', None):
+            obj_id = 'draft'
+        else:
+            # Default lookup
+            obj_id = getattr(instance, id_field, getattr(instance, 'pk', 'unknown'))
+            
+        return f"{directory}/{obj_id}/{new_filename}"
+        
+    return wrapper
 
 
-def product_image_path(instance, filename: str) -> str:
-    """Generate path for product image uploads."""
-    ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
-    new_filename = f"{uuid.uuid4()}.{ext}"
-    product_id = getattr(instance, 'product_id', None) or getattr(instance.product, 'id', 'unknown')
-    return f"products/{product_id}/{new_filename}"
-
-
-def category_image_path(instance, filename: str) -> str:
-    """Generate path for category image uploads."""
-    ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
-    new_filename = f"{uuid.uuid4()}.{ext}"
-    return f"categories/{instance.slug}/{new_filename}"
-
-
-def brand_logo_path(instance, filename: str) -> str:
-    """Generate path for brand logo uploads."""
-    ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'png'
-    new_filename = f"{uuid.uuid4()}.{ext}"
-    return f"brands/{instance.slug}/{new_filename}"
-
-
-def review_image_path(instance, filename: str) -> str:
-    """Generate path for review image uploads."""
-    ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
-    new_filename = f"{uuid.uuid4()}.{ext}"
-    review_id = getattr(instance, 'review_id', None) or getattr(instance, 'id', 'unknown')
-    return f"reviews/{review_id}/{new_filename}"
-
-
-def return_evidence_path(instance, filename: str) -> str:
-    """Generate path for return evidence uploads."""
-    ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
-    new_filename = f"{uuid.uuid4()}.{ext}"
-    return_id = getattr(instance, 'return_request_id', 'unknown')
-    return f"returns/{return_id}/{new_filename}"
-
+user_avatar_path = get_upload_path('avatars')
+product_image_path = get_upload_path('products')
+category_image_path = get_upload_path('categories', id_field='slug')
+brand_logo_path = get_upload_path('brands', id_field='slug')
+review_image_path = get_upload_path('reviews')
+return_evidence_path = get_upload_path('returns')
 
 def banner_image_path(instance, filename: str) -> str:
     """Generate path for banner image uploads."""
@@ -88,17 +89,5 @@ def banner_image_path(instance, filename: str) -> str:
     new_filename = f"{uuid.uuid4()}.{ext}"
     return f"banners/{new_filename}"
 
-
-def blog_image_path(instance, filename: str) -> str:
-    """Generate path for blog image uploads."""
-    ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
-    new_filename = f"{uuid.uuid4()}.{ext}"
-    return f"blog/{instance.slug or 'draft'}/{new_filename}"
-
-
-def invoice_path(instance, filename: str) -> str:
-    """Generate path for invoice uploads (private)."""
-    ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'pdf'
-    new_filename = f"{uuid.uuid4()}.{ext}"
-    order_id = getattr(instance, 'order_id', 'unknown')
-    return f"invoices/{order_id}/{new_filename}"
+blog_image_path = get_upload_path('blog', id_field='slug')
+invoice_path = get_upload_path('invoices')

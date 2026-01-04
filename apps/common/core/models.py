@@ -75,9 +75,6 @@ class SoftDeleteManager(models.Manager):
         return super().get_queryset().filter(is_deleted=True)
 
 
-class AllObjectsManager(models.Manager):
-    """Manager that includes all records, including soft-deleted."""
-    pass
 
 
 class SoftDeleteModel(TimeStampedModel):
@@ -108,7 +105,6 @@ class SoftDeleteModel(TimeStampedModel):
     )
 
     objects = SoftDeleteManager()
-    all_objects = AllObjectsManager()
 
     class Meta:
         abstract = True
@@ -171,7 +167,10 @@ class SluggedMixin(models.Model):
     
     def generate_unique_slug(self) -> str:
         """Generate a unique slug."""
-        base_slug = slugify(self.get_slug_source(), allow_unicode=True)
+        # Use custom vietnamese slug generation to avoid accents in URL
+        from ..core.utils import generate_slug_from_vietnamese
+        
+        base_slug = generate_slug_from_vietnamese(self.get_slug_source())
         if not base_slug:
             base_slug = str(uuid.uuid4())[:8]
         
@@ -192,6 +191,7 @@ class SluggedMixin(models.Model):
     
     def save(self, *args, **kwargs):
         from django.db import IntegrityError
+        from ..core.utils import generate_slug_from_vietnamese
         
         max_retries = 5
         for attempt in range(max_retries):
@@ -205,7 +205,7 @@ class SluggedMixin(models.Model):
                 # Check if it's a slug uniqueness error
                 if 'slug' in str(e).lower() and attempt < max_retries - 1:
                     # Regenerate slug with random suffix
-                    base_slug = slugify(self.get_slug_source(), allow_unicode=True) or str(uuid.uuid4())[:8]
+                    base_slug = generate_slug_from_vietnamese(self.get_slug_source()) or str(uuid.uuid4())[:8]
                     self.slug = f"{base_slug}-{uuid.uuid4().hex[:6]}"
                     continue
                 raise

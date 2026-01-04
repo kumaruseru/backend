@@ -81,22 +81,3 @@ def custom_exception_handler(exc, context):
     )
 
 
-class ServiceUnavailable(APIException):
-    """API Exception for service unavailable."""
-    status_code = 503
-    default_detail = 'Dịch vụ tạm thời không khả dụng'
-    default_code = 'service_unavailable'
-
-
-class BadRequest(APIException):
-    """API Exception for bad requests."""
-    status_code = 400
-    default_detail = 'Yêu cầu không hợp lệ'
-    default_code = 'bad_request'
-
-
-class Conflict(APIException):
-    """API Exception for conflicts."""
-    status_code = 409
-    default_detail = 'Xung đột dữ liệu'
-    default_code = 'conflict'
