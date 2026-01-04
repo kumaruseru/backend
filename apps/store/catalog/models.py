@@ -596,32 +596,12 @@ class Product(UUIDModel):
             return self.stock.available_quantity
         return 0
     
-    def increment_view_count(self):
-        """Increment view count using Redis for high traffic performance."""
-        from django.core.cache import cache
-        
-        # Use Redis to buffer view counts
-        cache_key = f'product_views:{self.pk}'
-        try:
-            # Increment in Redis
-            new_count = cache.incr(cache_key)
-            
-            # Sync to DB every 10 views
-            if new_count % 10 == 0:
-                Product.objects.filter(pk=self.pk).update(
-                    view_count=models.F('view_count') + 10
-                )
-                cache.set(cache_key, 0, timeout=3600)
-        except (ValueError, TypeError):
-            # Key doesn't exist or Redis issue, fallback to direct update
-            cache.set(cache_key, 1, timeout=3600)
-            Product.objects.filter(pk=self.pk).update(
-                view_count=models.F('view_count') + 1
-            )
-    
-    def increment_sold_count(self, quantity: int = 1):
-        """Increment sold count atomically."""
-        Product.objects.filter(pk=self.pk).update(sold_count=models.F('sold_count') + quantity)
+    @property
+    def stock_quantity(self) -> int:
+        """Get available stock quantity."""
+        if hasattr(self, 'stock'):
+            return self.stock.available_quantity
+        return 0
 
 
 class ProductImage(TimeStampedModel):

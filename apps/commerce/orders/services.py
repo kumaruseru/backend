@@ -20,10 +20,11 @@ from django.conf import settings
 from apps.common.core.exceptions import (
     NotFoundError, BusinessRuleViolation, ValidationError
 )
-from apps.store.inventory.services import InventoryService
 from apps.commerce.shipping.strategies import ShippingStrategyFactory
 from apps.store.catalog.models import Product
 from apps.commerce.cart.models import Cart
+from apps.commerce.gateways.inventory import LocalInventoryGateway
+from apps.commerce.orders.interfaces import InventoryGateway
 from .models import Order, OrderItem, OrderStatusHistory, OrderNote
 
 logger = logging.getLogger('apps.orders')
@@ -40,9 +41,13 @@ class OrderService:
     - Notifications
     """
     
-    @staticmethod
+    # Dependency Injection (Manual for now, can be via Container)
+    inventory_gateway: InventoryGateway = LocalInventoryGateway()
+    
+    @classmethod
     @transaction.atomic
     def create_order_from_cart(
+        cls,
         user,
         shipping_info: Dict[str, Any],
         payment_method: str = Order.PaymentMethod.COD,
@@ -53,68 +58,28 @@ class OrderService:
         user_agent: str = ''
     ) -> Order:
         """
-        Create order from user's cart.
+        Create order from user's cart (Refactored Composed Method).
         """
-        # Get cart
-        try:
-            cart = Cart.objects.prefetch_related(
-                'items', 'items__product'
-            ).get(user=user)
-        except Cart.DoesNotExist:
-            raise BusinessRuleViolation(message='Giỏ hàng trống')
+        # 1. Validate & Get Cart
+        cart = cls._get_validated_cart(user)
         
-        if not cart.items.exists():
-            raise BusinessRuleViolation(message='Giỏ hàng trống')
+        # 2. Prepare Items & Validate Stock/Product
+        items_data, subtotal = cls._prepare_and_validate_items(cart)
         
-        # Validate items and calculate totals
-        items_data = []
-        subtotal = Decimal('0')
-        
-        for cart_item in cart.items.select_related('product'):
-            product = cart_item.product
-            
-            if not product.is_active:
-                raise BusinessRuleViolation(
-                    message=f'Sản phẩm "{product.name}" không còn bán'
-                )
-            
-            # Check stock decoupled
-            if hasattr(product, 'stock'):
-                if not InventoryService.check_stock_availability(product.id, cart_item.quantity):
-                    # We can fetch available quantity if needed for message, 
-                    # but simple boolean check is faster for high concurrency validation
-                    raise BusinessRuleViolation(
-                        message=f'Sản phẩm "{product.name}" không đủ số lượng trong kho'
-                    )
-            
-            price = product.sale_price or product.price
-            items_data.append({
-                'product': product,
-                'quantity': cart_item.quantity,
-                'unit_price': price,
-                'original_price': product.price if product.sale_price else None
-            })
-            subtotal += price * cart_item.quantity
-        
-        # Calculate shipping fee using Strategy
-        shipping_fee = OrderService._calculate_shipping_fee(
+        # 3. Calculate Shipping
+        shipping_fee = cls._calculate_shipping_fee(
             shipping_info.get('district_id'),
             shipping_info.get('ward_code'),
             subtotal
         )
         
-        # Apply coupon
-        coupon = None
-        coupon_discount = Decimal('0')
-        if coupon_code:
-            coupon, coupon_discount = OrderService._apply_coupon(
-                coupon_code, user, subtotal
-            )
+        # 4. Apply Coupon
+        coupon, coupon_discount = cls._apply_coupon(coupon_code, user, subtotal)
         
-        # Calculate total
+        # 5. Calculate Final Total
         total = subtotal + shipping_fee - coupon_discount
         
-        # Create order
+        # 6. Persist Order
         order = Order.objects.create(
             user=user,
             source=source,
@@ -147,7 +112,62 @@ class OrderService:
             user_agent=user_agent
         )
         
-        # Create order items
+        # 7. Create Order Items
+        cls._create_order_items(order, items_data)
+        
+        # 8. Reserve Stock & Side Effects
+        cls._handle_post_creation_side_effects(order, items_data, coupon, cart, user)
+        
+        return order
+
+    # --- Composed Steps ---
+
+    @staticmethod
+    def _get_validated_cart(user) -> Cart:
+        try:
+            cart = Cart.objects.prefetch_related('items', 'items__product').get(user=user)
+        except Cart.DoesNotExist:
+            raise BusinessRuleViolation(message='Giỏ hàng trống')
+        
+        if not cart.items.exists():
+            raise BusinessRuleViolation(message='Giỏ hàng trống')
+        return cart
+
+    @classmethod
+    def _prepare_and_validate_items(cls, cart: Cart) -> tuple[List[Dict], Decimal]:
+        items_data = []
+        subtotal = Decimal('0')
+        
+        # Pre-fetch products to avoid N+1 is handled by prefetch_related in _get_validated_cart
+        # But we still iterate
+        
+        for cart_item in cart.items.all():  # .all() uses prefetch cache
+            product = cart_item.product
+            
+            # Domain Validation
+            if not product.is_active:
+                raise BusinessRuleViolation(message=f'Sản phẩm "{product.name}" không còn bán')
+            
+            # Inventory Check via Gateway
+            if hasattr(product, 'stock'):
+                if not cls.inventory_gateway.check_availability(product.id, cart_item.quantity):
+                     raise BusinessRuleViolation(
+                        message=f'Sản phẩm "{product.name}" không đủ số lượng trong kho'
+                    )
+            
+            price = product.sale_price or product.price
+            items_data.append({
+                'product': product,
+                'quantity': cart_item.quantity,
+                'unit_price': price,
+                'original_price': product.price if product.sale_price else None
+            })
+            subtotal += price * cart_item.quantity
+            
+        return items_data, subtotal
+
+    @staticmethod
+    def _create_order_items(order: Order, items_data: List[Dict]):
         order_items = []
         for item_data in items_data:
             product = item_data['product']
@@ -163,13 +183,14 @@ class OrderService:
                 original_price=item_data['original_price']
             ))
         OrderItem.objects.bulk_create(order_items)
-        
-        # Reserve stock via Service
+
+    @classmethod
+    def _handle_post_creation_side_effects(cls, order, items_data, coupon, cart, user):
+        # Reserve stock via Gateway
         for item_data in items_data:
             product = item_data['product']
             if hasattr(product, 'stock'):
-                # Reserve stock using service
-                InventoryService.reserve_stock(
+                cls.inventory_gateway.reserve_stock(
                     product_id=product.id,
                     quantity=item_data['quantity'],
                     reference=order.order_number,
@@ -183,7 +204,7 @@ class OrderService:
         # Clear cart
         cart.clear()
         
-        # Log
+        # Log History
         OrderStatusHistory.objects.create(
             order=order,
             old_status='',
@@ -191,19 +212,17 @@ class OrderService:
             notes='Đơn hàng được tạo'
         )
         
-        logger.info(
-            f"Order created: {order.order_number} by {user.email}, "
-            f"total: {total:,.0f}₫"
-        )
+        logger.info(f"Order created: {order.order_number} by {user.email}, total: {order.total:,.0f}₫")
         
         # Notify
-        OrderService._notify_order_created(order)
-        
-        return order
+        cls._notify_order_created(order)
+
+    # --- End Composed Steps ---
     
-    @staticmethod
+    @classmethod
     @transaction.atomic
     def create_order_from_items(
+        cls,
         user,
         items: List[Dict],
         shipping_info: Dict[str, Any],
@@ -229,9 +248,9 @@ class OrderService:
             
             quantity = item.get('quantity', 1)
             
-            # Check stock
+            # Check stock via Gateway
             if hasattr(product, 'stock'):
-                if not InventoryService.check_stock_availability(product.id, quantity):
+                if not cls.inventory_gateway.check_availability(product.id, quantity):
                     raise BusinessRuleViolation(
                          message=f'"{product.name}" không đủ số lượng trong kho'
                     )
@@ -246,7 +265,7 @@ class OrderService:
             subtotal += price * quantity
         
         # Calculate shipping
-        shipping_fee = OrderService._calculate_shipping_fee(
+        shipping_fee = cls._calculate_shipping_fee(
             shipping_info.get('district_id'),
             shipping_info.get('ward_code'),
             subtotal
@@ -256,7 +275,7 @@ class OrderService:
         coupon = None
         coupon_discount = Decimal('0')
         if coupon_code:
-            coupon, coupon_discount = OrderService._apply_coupon(
+            coupon, coupon_discount = cls._apply_coupon(
                 coupon_code, user, subtotal
             )
         
@@ -289,24 +308,13 @@ class OrderService:
         )
         
         # Create items
-        for item_data in items_data:
-            product = item_data['product']
-            OrderItem.objects.create(
-                order=order,
-                product=product,
-                product_name=product.name,
-                product_sku=product.sku or '',
-                product_image=product.images.first().image.url if product.images.exists() else '',
-                quantity=item_data['quantity'],
-                unit_price=item_data['unit_price'],
-                original_price=item_data['original_price']
-            )
+        cls._create_order_items(order, items_data)
         
-        # Reserve stock
+        # Reserve stock via Gateway (Manual handling here as we don't have cart side effects)
         for item_data in items_data:
             product = item_data['product']
             if hasattr(product, 'stock'):
-                InventoryService.reserve_stock(
+                cls.inventory_gateway.reserve_stock(
                     product_id=product.id,
                     quantity=item_data['quantity'],
                     reference=order.order_number,
@@ -324,7 +332,7 @@ class OrderService:
         )
         
         logger.info(f"Order created: {order.order_number}")
-        OrderService._notify_order_created(order)
+        cls._notify_order_created(order)
         
         return order
     

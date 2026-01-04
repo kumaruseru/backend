@@ -107,12 +107,47 @@ class CatalogService:
             ).get(slug=slug, is_active=True)
             
             if increment_view:
-                product.increment_view_count()
+                CatalogService.increment_product_view_count(product)
             
             return product
             
         except Product.DoesNotExist:
             raise NotFoundError(message='Không tìm thấy sản phẩm')
+            
+    @staticmethod
+    def increment_product_view_count(product: Product):
+        """
+        Increment view count logic (moved from Model).
+        Uses Redis for buffer if available.
+        """
+        from django.db.models import F
+        from django.core.cache import cache
+        
+        cache_key = f'product_views:{product.pk}'
+        try:
+            # Increment in Redis
+            new_count = cache.incr(cache_key)
+            
+            # Sync to DB every 10 views
+            if new_count % 10 == 0:
+                Product.objects.filter(pk=product.pk).update(
+                    view_count=F('view_count') + 10
+                )
+                cache.set(cache_key, 0, timeout=3600)
+        except (ValueError, TypeError):
+            # Key doesn't exist or Redis issue, fallback to direct update
+            cache.set(cache_key, 1, timeout=3600)
+            Product.objects.filter(pk=product.pk).update(
+                view_count=F('view_count') + 1
+            )
+
+    @staticmethod
+    def increment_product_sold_count(product_id: UUID, quantity: int = 1):
+        """
+        Increment sold count atomically.
+        """
+        from django.db.models import F
+        Product.objects.filter(pk=product_id).update(sold_count=F('sold_count') + quantity)
     
     @staticmethod
     def get_product_by_id(product_id: UUID) -> Product:

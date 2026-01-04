@@ -14,6 +14,7 @@ from datetime import timedelta
 
 from apps.common.core.exceptions import NotFoundError, ValidationError, BusinessRuleViolation
 from .models import Warehouse, StockItem, StockMovement, StockAlert, InventoryCount, InventoryCountItem
+from apps.store.catalog.services import CatalogService
 
 logger = logging.getLogger('apps.inventory')
 
@@ -170,8 +171,8 @@ class InventoryService:
         stock = InventoryService.get_stock(product_id, warehouse_id)
         stock.confirm_sale(quantity, reference, user)
         
-        # Update product sold count
-        stock.product.increment_sold_count(quantity)
+        # Update product sold count via CatalogService
+        CatalogService.increment_product_sold_count(stock.product_id, quantity)
     
     @staticmethod
     @transaction.atomic
