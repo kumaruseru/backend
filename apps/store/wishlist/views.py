@@ -257,11 +257,9 @@ class ToggleWishlistView(APIView):
         is_in_wishlist = WishlistService.is_in_wishlist(request.user, product_id)
         
         if is_in_wishlist:
-            # Remove from all wishlists
-            WishlistItem.objects.filter(
-                wishlist__user=request.user,
-                product_id=product_id
-            ).delete()
+            # FIX: Use Service instead of direct ORM delete
+            # This ensures consistent behavior (logging, signals, counters)
+            WishlistService.remove_product_from_all(request.user, product_id)
             return Response({'in_wishlist': False})
         else:
             # Add to default

@@ -15,6 +15,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 
 from apps.common.core.exceptions import DomainException
+from apps.common.utils.security import IPValidator
 from .models import Order
 from .serializers import (
     OrderSerializer, OrderListSerializer, OrderTrackingSerializer,
@@ -83,7 +84,7 @@ class OrderFromCartView(APIView):
                 coupon_code=data.get('coupon_code', ''),
                 customer_note=data.get('customer_note', ''),
                 source=data.get('source', 'web'),
-                ip_address=request.META.get('REMOTE_ADDR', ''),
+                ip_address=IPValidator.get_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', '')[:500]
             )
             

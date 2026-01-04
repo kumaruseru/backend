@@ -3,6 +3,7 @@ Store Inventory - Production-Ready API Views.
 
 Comprehensive inventory management endpoints.
 """
+from django.db import models  # <--- Đã chuyển import lên đây để tránh lỗi NameError
 from rest_framework import status, permissions, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -70,6 +71,7 @@ class StockListView(generics.ListAPIView):
         if warehouse_id:
             queryset = queryset.filter(warehouse_id=warehouse_id)
         
+        # Sử dụng models.F và models.Q ở đây đã an toàn
         if status_filter == 'low':
             queryset = queryset.filter(
                 quantity__gt=0,
@@ -97,7 +99,7 @@ class StockListView(generics.ListAPIView):
         tags=['Inventory - Stock']
     )
     def get(self, request, *args, **kwargs):
-        from django.db import models
+        # Đã xóa import cục bộ thừa thãi tại đây
         return super().get(request, *args, **kwargs)
 
 

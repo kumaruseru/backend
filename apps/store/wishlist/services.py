@@ -281,6 +281,25 @@ class WishlistService:
             )
         )
     
+    @staticmethod
+    @transaction.atomic
+    def remove_product_from_all(user, product_id: UUID) -> int:
+        """
+        Remove a product from all of user's wishlists.
+        
+        Used by ToggleWishlistView for consistent behavior.
+        Returns number of items deleted.
+        """
+        deleted, _ = WishlistItem.objects.filter(
+            wishlist__user=user,
+            product_id=product_id
+        ).delete()
+        
+        if deleted > 0:
+            logger.info(f"Removed product {product_id} from {deleted} wishlist(s) for user {user.id}")
+        
+        return deleted
+    
     # --- Price Alerts ---
     
     @staticmethod

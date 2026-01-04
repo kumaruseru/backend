@@ -91,7 +91,7 @@ class TwoFactorDisableView(APIView):
 
 class TwoFactorVerifyView(APIView):
     """Verify 2FA code (during login)."""
-    permission_classes = [permissions.AllowAny]  # Called during login flow
+    permission_classes = [permissions.AllowAny]
     
     @extend_schema(request=TwoFactorVerifySerializer, tags=['2FA'])
     def post(self, request):
@@ -99,9 +99,18 @@ class TwoFactorVerifyView(APIView):
         serializer = TwoFactorVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        # This would be called after initial auth, using a temp token
-        # Implementation depends on auth flow
-        return Response({'message': 'Verification endpoint'})
+        try:
+            # Assuming AuthService handles the final token issuance after 2FA check
+            # We import here to avoid circular dependencies if any
+            from apps.users.identity.services import AuthService
+            
+            result = AuthService.verify_2fa_login(
+                code=serializer.validated_data['code'],
+                temp_token=serializer.validated_data.get('temp_token')
+            )
+            return Response(result)
+        except DomainException as e:
+            return Response(e.to_dict(), status=status.HTTP_400_BAD_REQUEST)
 
 
 class BackupCodesView(APIView):

@@ -339,9 +339,7 @@ class AdminShippingStatisticsView(APIView):
 class GHNWebhookView(APIView):
     """
     GHN Webhook endpoint.
-    
     Receives shipping status updates from GHN.
-    Configure this URL in GHN dashboard.
     """
     permission_classes = [permissions.AllowAny]
     
@@ -368,27 +366,60 @@ class GHNWebhookView(APIView):
             
         except Exception as e:
             logger.error(f"GHN webhook error: {e}", exc_info=True)
-            # Return 200 to prevent webhook retry
             return Response({'success': False, 'error': str(e)})
 
 
 @method_decorator(csrf_exempt, name='dispatch')
 class GHTKWebhookView(APIView):
-    """GHTK Webhook placeholder."""
+    """
+    GHTK Webhook endpoint.
+    Receives shipping status updates from Giao Hang Tiet Kiem.
+    """
     permission_classes = [permissions.AllowAny]
     
+    @extend_schema(tags=['Shipping - Webhooks'])
     def post(self, request):
         """Process GHTK webhook."""
-        # TODO: Implement GHTK webhook processing
-        return Response({'success': True})
+        import logging
+        logger = logging.getLogger('apps.shipping')
+        
+        try:
+            payload = request.data
+            logger.info(f"GHTK webhook received", extra={'payload': payload})
+            
+            # Delegate processing to service to maintain abstraction
+            result = ShippingService.process_webhook('ghtk', payload)
+            
+            return Response({'success': result.get('success', False)})
+            
+        except Exception as e:
+            logger.error(f"GHTK webhook error: {e}", exc_info=True)
+            return Response({'success': False, 'error': str(e)})
 
 
 @method_decorator(csrf_exempt, name='dispatch')
 class VTPWebhookView(APIView):
-    """Viettel Post Webhook placeholder."""
+    """
+    Viettel Post Webhook endpoint.
+    Receives shipping status updates from Viettel Post.
+    """
     permission_classes = [permissions.AllowAny]
     
+    @extend_schema(tags=['Shipping - Webhooks'])
     def post(self, request):
         """Process Viettel Post webhook."""
-        # TODO: Implement VTP webhook processing
-        return Response({'success': True})
+        import logging
+        logger = logging.getLogger('apps.shipping')
+        
+        try:
+            payload = request.data
+            logger.info(f"VTP webhook received", extra={'payload': payload})
+            
+            # Delegate processing to service
+            result = ShippingService.process_webhook('vtp', payload)
+            
+            return Response({'success': result.get('success', False)})
+            
+        except Exception as e:
+            logger.error(f"VTP webhook error: {e}", exc_info=True)
+            return Response({'success': False, 'error': str(e)})

@@ -9,15 +9,24 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
+# Django imports moved to top level
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.http import urlsafe_base64_decode
+from django.utils.encoding import force_str
+from django.utils import timezone
+
 from apps.common.core.exceptions import DomainException
 from apps.common.utils.security import IPValidator
-from .models import User, UserAddress
+from .models import User, UserAddress, UserSession, LoginHistory, UserPreferences, AccountDeletionRequest
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, UserSerializer,
     UserProfileUpdateSerializer, UserAddressSerializer, UserAddressCreateSerializer,
-    PasswordChangeSerializer, TokenPairSerializer
+    PasswordChangeSerializer, TokenPairSerializer, UserSessionSerializer,
+    LoginHistorySerializer, UserPreferencesSerializer, UserPreferencesUpdateSerializer,
+    AccountDeletionStatusSerializer, AccountDeletionRequestSerializer
 )
 from .services import AuthService, ProfileService, AddressService
+from .tasks import send_verification_email, send_welcome_email
 
 
 class RegisterView(APIView):
@@ -46,7 +55,6 @@ class RegisterView(APIView):
             )
             
             # Send verification email asynchronously
-            from .tasks import send_verification_email
             send_verification_email.delay(user.id)
             
             return Response(
@@ -145,11 +153,6 @@ class VerifyEmailView(APIView):
     )
     def post(self, request):
         """Verify user email with token."""
-        from django.contrib.auth.tokens import default_token_generator
-        from django.utils.http import urlsafe_base64_decode
-        from django.utils.encoding import force_str
-        from django.utils import timezone
-        
         uid = request.data.get('uid')
         token = request.data.get('token')
         
@@ -163,7 +166,6 @@ class VerifyEmailView(APIView):
             user_id = force_str(urlsafe_base64_decode(uid))
             user = User.objects.get(pk=user_id)
         except (TypeError, ValueError, User.DoesNotExist, Exception):
-            # Catch all exceptions including ValidationError for invalid UUID format
             return Response(
                 {'error': 'Link xác thực không hợp lệ'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -184,7 +186,6 @@ class VerifyEmailView(APIView):
         user.save(update_fields=['is_email_verified', 'email_verified_at'])
         
         # Send welcome email
-        from .tasks import send_welcome_email
         send_welcome_email.delay(str(user.id))
         
         return Response({'message': 'Email đã được xác thực thành công'})
@@ -218,7 +219,6 @@ class ResendVerificationView(APIView):
         if user.is_email_verified:
             return Response({'message': 'Email đã được xác thực'})
         
-        from .tasks import send_verification_email
         send_verification_email.delay(str(user.id))
         
         return Response({'message': 'Email xác thực đã được gửi'})
@@ -388,9 +388,6 @@ class SessionListView(APIView):
     @extend_schema(tags=['Identity - Security'])
     def get(self, request):
         """Get all active sessions for current user."""
-        from .models import UserSession
-        from .serializers import UserSessionSerializer
-        
         sessions = UserSession.objects.filter(
             user=request.user,
             is_active=True
@@ -406,8 +403,6 @@ class SessionTerminateView(APIView):
     @extend_schema(tags=['Identity - Security'])
     def post(self, request, session_id):
         """Terminate a specific session."""
-        from .models import UserSession
-        
         try:
             session = UserSession.objects.get(id=session_id, user=request.user)
             session.terminate()
@@ -423,8 +418,6 @@ class SessionTerminateAllView(APIView):
     @extend_schema(tags=['Identity - Security'])
     def post(self, request):
         """Terminate all sessions except current."""
-        from .models import UserSession
-        
         current_session_key = request.data.get('current_session_key')
         count = UserSession.terminate_all_for_user(request.user, current_session_key)
         return Response({'terminated': count})
@@ -439,9 +432,6 @@ class LoginHistoryView(APIView):
     @extend_schema(tags=['Identity - Security'])
     def get(self, request):
         """Get login history for current user."""
-        from .models import LoginHistory
-        from .serializers import LoginHistorySerializer
-        
         history = LoginHistory.objects.filter(user=request.user).order_by('-created_at')[:50]
         return Response(LoginHistorySerializer(history, many=True).data)
 
@@ -455,18 +445,12 @@ class PreferencesView(APIView):
     @extend_schema(tags=['Identity - Preferences'])
     def get(self, request):
         """Get user preferences."""
-        from .models import UserPreferences
-        from .serializers import UserPreferencesSerializer
-        
         prefs, _ = UserPreferences.objects.get_or_create(user=request.user)
         return Response(UserPreferencesSerializer(prefs).data)
     
     @extend_schema(tags=['Identity - Preferences'])
     def patch(self, request):
         """Update user preferences."""
-        from .models import UserPreferences
-        from .serializers import UserPreferencesSerializer, UserPreferencesUpdateSerializer
-        
         prefs, _ = UserPreferences.objects.get_or_create(user=request.user)
         serializer = UserPreferencesUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -487,9 +471,6 @@ class AccountDeletionView(APIView):
     @extend_schema(tags=['Identity - Account'])
     def get(self, request):
         """Check pending deletion request."""
-        from .models import AccountDeletionRequest
-        from .serializers import AccountDeletionStatusSerializer
-        
         pending = AccountDeletionRequest.objects.filter(user=request.user, status='pending').first()
         if pending:
             return Response(AccountDeletionStatusSerializer(pending).data)
@@ -498,9 +479,6 @@ class AccountDeletionView(APIView):
     @extend_schema(tags=['Identity - Account'])
     def post(self, request):
         """Request account deletion."""
-        from .models import AccountDeletionRequest
-        from .serializers import AccountDeletionRequestSerializer, AccountDeletionStatusSerializer
-        
         serializer = AccountDeletionRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -517,8 +495,6 @@ class AccountDeletionView(APIView):
     @extend_schema(tags=['Identity - Account'])
     def delete(self, request):
         """Cancel account deletion request."""
-        from .models import AccountDeletionRequest
-        
         pending = AccountDeletionRequest.objects.filter(user=request.user, status='pending').first()
         if pending:
             pending.cancel()
