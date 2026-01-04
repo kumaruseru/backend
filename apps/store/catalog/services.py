@@ -9,9 +9,11 @@ import logging
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from django.db import transaction
+from django.db.models import F
+from django.core.cache import cache
 
 from apps.common.core.exceptions import NotFoundError, ValidationError
-from .models import Category, Brand, Product, ProductImage
+from .models import Category, Brand, Product, ProductImage, ProductStat
 
 logger = logging.getLogger('apps.catalog')
 
@@ -50,10 +52,6 @@ class CatalogService:
         Increment view count in ProductStat (Vertical Partitioning).
         Uses Redis for buffer if available.
         """
-        from django.db.models import F
-        from django.core.cache import cache
-        from .models import ProductStat
-        
         cache_key = f'product_views:{product.pk}'
         try:
             # Increment in Redis

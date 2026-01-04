@@ -28,9 +28,9 @@ class AuthService:
     Handles user registration, login, logout, and token management.
     """
     
-    # Account lockout settings
-    MAX_FAILED_ATTEMPTS = 5
-    LOCKOUT_DURATION = 30 * 60  # 30 minutes in seconds
+    # Account lockout settings (configurable via Django settings)
+    MAX_FAILED_ATTEMPTS = getattr(settings, 'AUTH_MAX_FAILED_ATTEMPTS', 5)
+    LOCKOUT_DURATION = getattr(settings, 'AUTH_LOCKOUT_DURATION', 30 * 60)  # 30 minutes default
     
     @staticmethod
     def register(
