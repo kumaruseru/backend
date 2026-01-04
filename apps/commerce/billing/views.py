@@ -16,6 +16,7 @@ from django.utils.decorators import method_decorator
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 
 from apps.common.core.exceptions import DomainException
+from apps.common.utils.security import IPValidator
 from apps.commerce.orders.models import Order
 from .models import Payment, PaymentMethod
 from .serializers import (
@@ -58,7 +59,7 @@ class PaymentCreateView(APIView):
                 method=data['method'],
                 return_url=data.get('return_url', ''),
                 cancel_url=data.get('cancel_url', ''),
-                ip_address=request.META.get('REMOTE_ADDR', ''),
+                ip_address=IPValidator.get_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', '')
             )
             

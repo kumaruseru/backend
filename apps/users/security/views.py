@@ -7,9 +7,15 @@ from rest_framework import status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
+from django.utils import timezone
+from datetime import timedelta
 
 from apps.common.core.exceptions import DomainException
 from apps.common.utils.security import IPValidator
+from .models import (
+    TwoFactorConfig, APIKey, TrustedDevice, 
+    SecurityAuditLog, LoginAttempt
+)
 from .services import TwoFactorService, LoginAuditService
 from .serializers import (
     TwoFactorStatusSerializer, TwoFactorSetupSerializer, TwoFactorEnableSerializer,
@@ -29,8 +35,6 @@ class TwoFactorStatusView(APIView):
     @extend_schema(responses={200: TwoFactorStatusSerializer}, tags=['2FA'])
     def get(self, request):
         """Get current 2FA configuration."""
-        from .models import TwoFactorConfig
-        
         config, _ = TwoFactorConfig.objects.get_or_create(user=request.user)
         return Response(TwoFactorStatusSerializer(config).data)
 
