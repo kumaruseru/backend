@@ -207,6 +207,11 @@ DEFAULT_SHIPPING_FEE = env.int('DEFAULT_SHIPPING_FEE', default=30000)
 # Orders above this value get free shipping
 FREE_SHIPPING_THRESHOLD = env.int('FREE_SHIPPING_THRESHOLD', default=500000)
 
+# --- MEILISEARCH (Product Search) ---
+MEILISEARCH_URL = env('MEILISEARCH_URL', default='http://localhost:7700')
+MEILISEARCH_API_KEY = env('MEILISEARCH_API_KEY', default='')
+USE_MEILISEARCH = env.bool('USE_MEILISEARCH', default=True)
+
 # --- API CONFIGURATION ---
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication',),
