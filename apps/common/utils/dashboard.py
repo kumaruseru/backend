@@ -33,8 +33,8 @@ def get_order_stats():
     current_orders = Order.objects.filter(created_at__gte=start_date, created_at__lte=end_date)
     prev_orders = Order.objects.filter(created_at__gte=start_date_prev, created_at__lt=end_date_prev)
 
-    current_revenue = current_orders.aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
-    prev_revenue = prev_orders.aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
+    current_revenue = current_orders.aggregate(total=Sum('total'))['total'] or Decimal('0')
+    prev_revenue = prev_orders.aggregate(total=Sum('total'))['total'] or Decimal('0')
 
     current_count = current_orders.count()
     prev_count = prev_orders.count()

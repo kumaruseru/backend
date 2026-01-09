@@ -122,10 +122,19 @@ class Order(UUIDModel):
 
     @staticmethod
     def _generate_order_number() -> str:
+        """
+        Generate unique order number in format: YYMMDD-XXXXXX
+        
+        - YYMMDD: Date component for human readability
+        - XXXXXX: Random hex for security (can't guess order volume)
+        
+        Example: 260109-A7F3B2 (January 9, 2026)
+        """
         import secrets
-        timestamp = str(int(time.time()))[-6:]
-        random_part = secrets.token_hex(3).upper()
-        return f"OWL{timestamp}{random_part}"
+        from datetime import datetime
+        date_part = datetime.now().strftime('%y%m%d')
+        random_part = secrets.token_hex(3).upper()  # 6 chars
+        return f"{date_part}-{random_part}"
 
     @property
     def full_address(self) -> str:

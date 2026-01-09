@@ -76,6 +76,10 @@ class User(AbstractUser):
     
     is_email_verified = models.BooleanField(default=False, verbose_name='Email Verified')
     email_verified_at = models.DateTimeField(null=True, blank=True, verbose_name='Email Verified At')
+    
+    # Payment integration
+    stripe_customer_id = models.CharField(max_length=50, blank=True, db_index=True, verbose_name='Stripe Customer ID')
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

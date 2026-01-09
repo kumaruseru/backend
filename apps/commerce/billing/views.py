@@ -168,9 +168,9 @@ class WebhookView(APIView):
                 if key.startswith('HTTP_')
             }
             
-            # For Stripe, get raw body for signature verification
+            # For Stripe, get raw body (bytes) for signature verification
             if gateway == 'stripe':
-                payload = request.body.decode('utf-8')
+                payload = request.body  # Keep as bytes for signature verification
                 headers['Stripe-Signature'] = request.META.get('HTTP_STRIPE_SIGNATURE', '')
             else:
                 payload = request.data

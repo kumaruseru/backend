@@ -142,6 +142,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     # --- 1. CORE & SHARED ---
     'apps.common.core',              # Core Utilities & Base Models
+    'apps.common.locations',         # Locations & Address
 
     # --- 2. USERS & IDENTITY ---
     'apps.users.identity',           # User Model & Profile
@@ -384,7 +385,7 @@ PERMISSIONS_POLICY = {
     'gyroscope': [],
     'magnetometer': [],
     'microphone': [],
-    'payment': [],  # Enable 'self' if needed for Stripe elements
+    'payment': ['self'],  # Enable 'self' if needed for Stripe elements
     'usb': [],
     'interest-cohort': [],
 }
@@ -634,9 +635,12 @@ SITE_URL = env('SITE_URL')
 FRONTEND_URL = env('FRONTEND_URL')
 
 # --- PAYMENTS ---
-STRIPE_PUBLIC_KEY = env('STRIPE_PUBLIC_KEY')
+# Stripe
+STRIPE_PUBLISHABLE_KEY = env('STRIPE_PUBLISHABLE_KEY', default=env('STRIPE_PUBLIC_KEY', default=''))
 STRIPE_SECRET_KEY = env('STRIPE_SECRET_KEY')
 STRIPE_WEBHOOK_SECRET = env('STRIPE_WEBHOOK_SECRET')
+from decimal import Decimal
+VND_TO_USD_RATE = Decimal(str(env.float('VND_TO_USD_RATE', default=25000.0)))
 
 VNPAY_TMN_CODE = env('VNPAY_TMN_CODE')
 VNPAY_HASH_SECRET = env('VNPAY_HASH_SECRET')
@@ -926,9 +930,4 @@ UNFOLD = {
             "950": "59 7 100",
         },
     },
-    
-    # Custom CSS styles
-    "STYLES": [
-        lambda request: "static/css/admin_custom.css",
-    ],
 }

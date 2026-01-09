@@ -1,6 +1,6 @@
 """Store Inventory - Stock Management Models."""
 from decimal import Decimal
-from django.db import models
+from django.db import models, transaction
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Sum, F
@@ -101,67 +101,215 @@ class StockItem(TimeStampedModel):
         return 'in_stock'
 
     def reserve(self, quantity: int, reference: str = '', user=None) -> bool:
-        if quantity > self.available_quantity:
-            return False
-        self.reserved_quantity += quantity
-        self.save(update_fields=['reserved_quantity', 'updated_at'])
-        StockMovement.objects.create(stock=self, movement_type=StockMovement.Type.RESERVE, quantity_change=-quantity, reason=StockMovement.Reason.RESERVATION, reference=reference, notes=f'Reserved {quantity} units', created_by=user)
+        """
+        Reserve stock atomically using select_for_update to prevent race conditions.
+        Returns True if reservation successful, False otherwise.
+        """
+        with transaction.atomic():
+            # Lock this row for update to prevent race conditions
+            locked_stock = StockItem.objects.select_for_update().get(pk=self.pk)
+            if quantity > locked_stock.available_quantity:
+                return False
+            # Use F() expression for atomic update
+            StockItem.objects.filter(pk=self.pk).update(
+                reserved_quantity=F('reserved_quantity') + quantity,
+                updated_at=timezone.now()
+            )
+            self.refresh_from_db()
+            StockMovement.objects.create(
+                stock=self, 
+                movement_type=StockMovement.Type.RESERVE, 
+                quantity_change=-quantity, 
+                reason=StockMovement.Reason.RESERVATION, 
+                reference=reference, 
+                notes=f'Reserved {quantity} units', 
+                created_by=user
+            )
         return True
 
     def release(self, quantity: int, reference: str = '', user=None) -> int:
-        release_amount = min(quantity, self.reserved_quantity)
-        self.reserved_quantity -= release_amount
-        self.save(update_fields=['reserved_quantity', 'updated_at'])
-        if release_amount > 0:
-            StockMovement.objects.create(stock=self, movement_type=StockMovement.Type.RELEASE, quantity_change=release_amount, reason=StockMovement.Reason.RELEASE, reference=reference, notes=f'Released {release_amount} reserved units', created_by=user)
+        """
+        Release reserved stock atomically.
+        Returns the amount actually released.
+        """
+        with transaction.atomic():
+            locked_stock = StockItem.objects.select_for_update().get(pk=self.pk)
+            release_amount = min(quantity, locked_stock.reserved_quantity)
+            if release_amount > 0:
+                StockItem.objects.filter(pk=self.pk).update(
+                    reserved_quantity=F('reserved_quantity') - release_amount,
+                    updated_at=timezone.now()
+                )
+                self.refresh_from_db()
+                StockMovement.objects.create(
+                    stock=self, 
+                    movement_type=StockMovement.Type.RELEASE, 
+                    quantity_change=release_amount, 
+                    reason=StockMovement.Reason.RELEASE, 
+                    reference=reference, 
+                    notes=f'Released {release_amount} reserved units', 
+                    created_by=user
+                )
         return release_amount
 
     def confirm_sale(self, quantity: int, reference: str = '', user=None) -> None:
-        reserved_to_deduct = min(quantity, self.reserved_quantity)
-        self.reserved_quantity -= reserved_to_deduct
-        self.quantity -= quantity
-        self.last_sold_at = timezone.now()
-        self.save(update_fields=['quantity', 'reserved_quantity', 'last_sold_at', 'updated_at'])
-        StockMovement.objects.create(stock=self, movement_type=StockMovement.Type.OUT, quantity_change=-quantity, quantity_before=self.quantity + quantity, quantity_after=self.quantity, reason=StockMovement.Reason.SALE, reference=reference, notes=f'Sold {quantity} units', created_by=user)
-        self._check_stock_alert()
+        """
+        Confirm a sale atomically - deduct from reserved and actual quantity.
+        Uses select_for_update to prevent overselling.
+        """
+        with transaction.atomic():
+            locked_stock = StockItem.objects.select_for_update().get(pk=self.pk)
+            reserved_to_deduct = min(quantity, locked_stock.reserved_quantity)
+            quantity_before = locked_stock.quantity
+            
+            # Atomic update using F() expressions
+            StockItem.objects.filter(pk=self.pk).update(
+                quantity=F('quantity') - quantity,
+                reserved_quantity=F('reserved_quantity') - reserved_to_deduct,
+                last_sold_at=timezone.now(),
+                updated_at=timezone.now()
+            )
+            self.refresh_from_db()
+            
+            StockMovement.objects.create(
+                stock=self, 
+                movement_type=StockMovement.Type.OUT, 
+                quantity_change=-quantity, 
+                quantity_before=quantity_before, 
+                quantity_after=self.quantity, 
+                reason=StockMovement.Reason.SALE, 
+                reference=reference, 
+                notes=f'Sold {quantity} units', 
+                created_by=user
+            )
+            self._check_stock_alert()
 
     def add_stock(self, quantity: int, reference: str = '', notes: str = '', unit_cost: Decimal = None, user=None) -> None:
-        old_quantity = self.quantity
-        self.quantity += quantity
-        self.last_restocked_at = timezone.now()
-        if unit_cost:
-            if self.unit_cost and old_quantity > 0:
-                total_cost = (self.unit_cost * old_quantity) + (unit_cost * quantity)
-                self.unit_cost = total_cost / self.quantity
-            else:
-                self.unit_cost = unit_cost
-        self.save(update_fields=['quantity', 'last_restocked_at', 'unit_cost', 'updated_at'])
-        StockMovement.objects.create(stock=self, movement_type=StockMovement.Type.IN, quantity_change=quantity, quantity_before=old_quantity, quantity_after=self.quantity, reason=StockMovement.Reason.PURCHASE, reference=reference, unit_cost=unit_cost, notes=notes or f'Added {quantity} units', created_by=user)
-        self._clear_stock_alert()
+        """
+        Add stock atomically using F() expression to prevent race conditions.
+        """
+        with transaction.atomic():
+            locked_stock = StockItem.objects.select_for_update().get(pk=self.pk)
+            old_quantity = locked_stock.quantity
+            
+            # Calculate new weighted average cost
+            new_unit_cost = None
+            if unit_cost:
+                if locked_stock.unit_cost and old_quantity > 0:
+                    total_cost = (locked_stock.unit_cost * old_quantity) + (unit_cost * quantity)
+                    new_unit_cost = total_cost / (old_quantity + quantity)
+                else:
+                    new_unit_cost = unit_cost
+            
+            # Build update dict
+            update_fields = {
+                'quantity': F('quantity') + quantity,
+                'last_restocked_at': timezone.now(),
+                'updated_at': timezone.now()
+            }
+            if new_unit_cost is not None:
+                update_fields['unit_cost'] = new_unit_cost
+            
+            StockItem.objects.filter(pk=self.pk).update(**update_fields)
+            self.refresh_from_db()
+            
+            StockMovement.objects.create(
+                stock=self, 
+                movement_type=StockMovement.Type.IN, 
+                quantity_change=quantity, 
+                quantity_before=old_quantity, 
+                quantity_after=self.quantity, 
+                reason=StockMovement.Reason.PURCHASE, 
+                reference=reference, 
+                unit_cost=unit_cost, 
+                notes=notes or f'Added {quantity} units', 
+                created_by=user
+            )
+            self._clear_stock_alert()
 
     def adjust_stock(self, new_quantity: int, reason: str = '', notes: str = '', user=None) -> None:
-        old_quantity = self.quantity
-        difference = new_quantity - old_quantity
-        self.quantity = new_quantity
-        self.save(update_fields=['quantity', 'updated_at'])
-        StockMovement.objects.create(stock=self, movement_type=StockMovement.Type.ADJUSTMENT, quantity_change=difference, quantity_before=old_quantity, quantity_after=new_quantity, reason=reason or StockMovement.Reason.ADJUSTMENT, notes=notes or f'Adjusted from {old_quantity} to {new_quantity}', created_by=user)
-        self._check_stock_alert()
+        """
+        Adjust stock to a specific quantity atomically.
+        """
+        with transaction.atomic():
+            locked_stock = StockItem.objects.select_for_update().get(pk=self.pk)
+            old_quantity = locked_stock.quantity
+            difference = new_quantity - old_quantity
+            
+            StockItem.objects.filter(pk=self.pk).update(
+                quantity=new_quantity,
+                updated_at=timezone.now()
+            )
+            self.refresh_from_db()
+            
+            StockMovement.objects.create(
+                stock=self, 
+                movement_type=StockMovement.Type.ADJUSTMENT, 
+                quantity_change=difference, 
+                quantity_before=old_quantity, 
+                quantity_after=new_quantity, 
+                reason=reason or StockMovement.Reason.ADJUSTMENT, 
+                notes=notes or f'Adjusted from {old_quantity} to {new_quantity}', 
+                created_by=user
+            )
+            self._check_stock_alert()
 
     def process_return(self, quantity: int, reference: str = '', user=None) -> None:
-        old_quantity = self.quantity
-        self.quantity += quantity
-        self.save(update_fields=['quantity', 'updated_at'])
-        StockMovement.objects.create(stock=self, movement_type=StockMovement.Type.IN, quantity_change=quantity, quantity_before=old_quantity, quantity_after=self.quantity, reason=StockMovement.Reason.RETURN, reference=reference, notes=f'Returned {quantity} units', created_by=user)
-        self._clear_stock_alert()
+        """
+        Process a return atomically - add quantity back to stock.
+        """
+        with transaction.atomic():
+            locked_stock = StockItem.objects.select_for_update().get(pk=self.pk)
+            old_quantity = locked_stock.quantity
+            
+            StockItem.objects.filter(pk=self.pk).update(
+                quantity=F('quantity') + quantity,
+                updated_at=timezone.now()
+            )
+            self.refresh_from_db()
+            
+            StockMovement.objects.create(
+                stock=self, 
+                movement_type=StockMovement.Type.IN, 
+                quantity_change=quantity, 
+                quantity_before=old_quantity, 
+                quantity_after=self.quantity, 
+                reason=StockMovement.Reason.RETURN, 
+                reference=reference, 
+                notes=f'Returned {quantity} units', 
+                created_by=user
+            )
+            self._clear_stock_alert()
 
     def mark_damaged(self, quantity: int, notes: str = '', user=None) -> None:
-        if quantity > self.quantity:
-            quantity = self.quantity
-        old_quantity = self.quantity
-        self.quantity -= quantity
-        self.save(update_fields=['quantity', 'updated_at'])
-        StockMovement.objects.create(stock=self, movement_type=StockMovement.Type.OUT, quantity_change=-quantity, quantity_before=old_quantity, quantity_after=self.quantity, reason=StockMovement.Reason.DAMAGE, notes=notes or f'Damaged/lost {quantity} units', created_by=user)
-        self._check_stock_alert()
+        """
+        Mark stock as damaged/lost atomically.
+        """
+        with transaction.atomic():
+            locked_stock = StockItem.objects.select_for_update().get(pk=self.pk)
+            # Clamp quantity to available
+            actual_qty = min(quantity, locked_stock.quantity)
+            if actual_qty <= 0:
+                return
+            old_quantity = locked_stock.quantity
+            
+            StockItem.objects.filter(pk=self.pk).update(
+                quantity=F('quantity') - actual_qty,
+                updated_at=timezone.now()
+            )
+            self.refresh_from_db()
+            
+            StockMovement.objects.create(
+                stock=self, 
+                movement_type=StockMovement.Type.OUT, 
+                quantity_change=-actual_qty, 
+                quantity_before=old_quantity, 
+                quantity_after=self.quantity, 
+                reason=StockMovement.Reason.DAMAGE, 
+                notes=notes or f'Damaged/lost {actual_qty} units', 
+                created_by=user
+            )
+            self._check_stock_alert()
 
     def _check_stock_alert(self):
         if self.is_out_of_stock:
